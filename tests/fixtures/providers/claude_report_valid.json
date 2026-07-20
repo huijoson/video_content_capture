@@ -1,0 +1,36 @@
+{
+  "overview": {
+    "summary": "本段說明利率政策與市場影響。",
+    "source_segment_ids": ["s0001"]
+  },
+  "core_topics": [
+    {
+      "topic": "利率政策",
+      "source_segment_ids": ["s0001"],
+      "is_speaker_opinion": false
+    }
+  ],
+  "important_numbers": [
+    {
+      "number_or_claim": "利率區間維持不變。",
+      "source_segment_ids": ["s0001"],
+      "is_speaker_opinion": false
+    }
+  ],
+  "glossary": [
+    {
+      "term": "政策利率",
+      "explanation": "中央銀行用來影響借貸成本的利率。",
+      "source_segment_ids": ["s0001"]
+    }
+  ],
+  "conclusion": {
+    "conclusion": "講者預期短期內政策不變。",
+    "possible_impact": "借貸成本可能維持目前水準。",
+    "source_segment_ids": ["s0002"],
+    "is_speaker_opinion": true
+  },
+  "source_index": {
+    "entries": ["s0001", "s0002"]
+  }
+}

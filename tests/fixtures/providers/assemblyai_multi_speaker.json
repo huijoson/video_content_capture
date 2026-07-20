@@ -1,0 +1,30 @@
+{
+  "id": "mock-transcript-001",
+  "status": "completed",
+  "language_code": "zh",
+  "text": "今天討論利率。下半年可能維持高檔。",
+  "utterances": [
+    {
+      "speaker": "A",
+      "start": 0,
+      "end": 2400,
+      "text": "今天討論利率。",
+      "confidence": 0.96,
+      "words": [
+        {"speaker": "A", "start": 0, "end": 900, "text": "今天", "confidence": 0.97},
+        {"speaker": "A", "start": 900, "end": 2400, "text": "討論利率。", "confidence": 0.95}
+      ]
+    },
+    {
+      "speaker": "B",
+      "start": 2500,
+      "end": 5200,
+      "text": "下半年可能維持高檔。",
+      "confidence": 0.91,
+      "words": [
+        {"speaker": "B", "start": 2500, "end": 3500, "text": "下半年", "confidence": 0.93},
+        {"speaker": "B", "start": 3500, "end": 5200, "text": "可能維持高檔。", "confidence": 0.90}
+      ]
+    }
+  ]
+}

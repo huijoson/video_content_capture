@@ -1,0 +1,95 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "video-content-capture"
+version = "0.1.0"
+description = "Video transcript and grounded report CLI."
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = { text = "Proprietary" }
+authors = [{ name = "Video Content Capture" }]
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2.7",
+    # Local Apple-Silicon transcription backend. The marker keeps other
+    # platforms on the existing AssemblyAI path without an unsupported wheel.
+    "mlx-whisper>=0.4.3,<0.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Verified against the installed SDK source/metadata on 2026-07-20.
+    # assemblyai 0.64.31 supports Python 3.13 (Requires-Python >=3.8; the
+    # 3.13 classifier is present) and exposes the Mandarin `LanguageCode.zh`,
+    # `speaker_labels`, `speakers_expected`, `SpeakerOptions` (min/max),
+    # `SpeechModel` (best/nano/slam-1/universal), upload, and polling APIs
+    # used by the AssemblyAI adapter. Pin the floor; allow patch upgrades
+    # within the verified major.minor for security/bug fixes.
+    "assemblyai>=0.64.31,<0.65",
+    # Verified against the installed SDK source/metadata on 2026-07-20.
+    # anthropic 0.117.0 supports Python 3.13 and exposes the structured-output
+    # API used by the reporting adapter: ``client.messages.parse(...,
+    # output_format=PydanticModel)`` returning a ``ParsedMessage`` with
+    # ``.parsed_output``; ``output_config={"effort": ...}``;
+    # ``thinking={"type": "adaptive"}``; ``Anthropic(api_key=...,
+    # max_retries=0)``; and the typed exception hierarchy
+    # (APIStatusError/RateLimitError/InternalServerError/OverloadedError/
+    # APIConnectionError/APITimeoutError/AuthenticationError/
+    # PermissionDeniedError/NotFoundError/BadRequestError/
+    # UnprocessableEntityError). ``claude-opus-4-8`` is a member of the
+    # SDK's ``ModelParam`` literal. Pin the floor; allow patch upgrades
+    # within the verified major.minor for security/bug fixes.
+    "anthropic>=0.117.0,<0.118",
+]
+
+[project.scripts]
+vcc = "video_content_capture.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-mock>=3.14",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/video_content_capture"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "pyproject.toml", "README.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "live: opt-in tests that make paid cloud API requests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Typer's documented idiom is `typer.Argument(...)` in argument defaults.
+"src/video_content_capture/cli.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+packages = ["video_content_capture"]
+
+# assemblyai ships pydantic-v1 typed models with loose/Any annotations; treat
+# the SDK as a third-party untyped dependency surface so strict mypy does not
+# fail on its internal Optional/Any fields.
+[[tool.mypy.overrides]]
+module = ["assemblyai.*"]
+ignore_missing_imports = true
+
+# The anthropic SDK ships typed models with some Optional/Any annotations and
+# literal-union constructs that strict mypy may flag; treat it as a third-party
+# typed surface so strict mypy does not fail on its internal annotations.
+[[tool.mypy.overrides]]
+module = ["anthropic.*"]
+ignore_missing_imports = true

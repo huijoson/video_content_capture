@@ -1,0 +1,5 @@
+{
+  "id": "mock-transcript-malformed",
+  "status": "completed",
+  "text": "This payload intentionally omits utterances and timing data."
+}

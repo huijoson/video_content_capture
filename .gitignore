@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.so
+
+# Virtual environments
+.venv/
+venv/
+
+# uv
+.uv-cache/
+
+# pytest / mypy / ruff
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environment
+.env
+.env.local
+
+# VCC runtime artifacts
+outputs/
+.vcc-cache/
+*.mp4
+*.MP4
+*.mov
+*.MOV
+*.mkv
+*.MKV
+*.webm
+*.WEBM
+*.m4a
+*.wav
+!tests/fixtures/media/synthetic-tone.wav
+*.mp3
+
+# Local agent/session state
+.claude/
+.superpowers/
+docs/checkpoints/
+
+# OS
+.DS_Store
