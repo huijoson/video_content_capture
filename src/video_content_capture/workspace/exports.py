@@ -282,6 +282,7 @@ class MediaExporter:
         progress: ProgressCallback | None = None,
         *,
         preview: bool = False,
+        original: ExportTrack | None = None,
     ) -> Path:
         """Draw one subtitle version into the picture: H.264 (VideoToolbox) + AAC MP4."""
         plan = self.burn_plan(source, cancel)
@@ -289,7 +290,15 @@ class MediaExporter:
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         subtitle = directory / "burned.ass"
         layout = SubtitleLayout(plan.width, plan.height)
-        subtitle.write_text(render_ass(track.cues, track.language, layout), encoding="utf-8")
+        bilingual = (
+            (original.cues, original.language)
+            # The same version on both sides would only duplicate one line.
+            if original is not None and original.version_id != track.version_id
+            else None
+        )
+        subtitle.write_text(
+            render_ass(track.cues, track.language, layout, bilingual), encoding="utf-8"
+        )
         subtitle.chmod(0o600)
         report = directory / "progress.txt"
         output = directory / f"{uuid4().hex}.mp4"
@@ -501,9 +510,12 @@ class ExportSnapshot(BaseModel):
     @model_validator(mode="after")
     def _burned_shape(self) -> Self:
         if self.subtitle_form == "burned" and (
-            self.container != "mp4" or self.include_original or len(self.tracks) != 1
+            # Bilingual burning is one MP4 with the target and original rendered together.
+            # `len(self.tracks) > 2` is unreachable while the field caps at two tracks,
+            # and stays as a guard should that bound ever widen.
+            self.container != "mp4" or len(self.tracks) > 2
         ):
-            raise ValueError("Burned exports are single-language MP4")
+            raise ValueError("Burned exports are one or two languages in MP4")
         return self
 
 
@@ -555,8 +567,8 @@ class ExportService:
     ) -> dict[str, object]:
         if len(target_version_ids) != 1:
             raise ValueError("請選擇一份目標字幕版本")
-        if subtitle_form == "burned" and (include_original or container not in {None, "mp4"}):
-            raise ValueError("燒錄字幕成品為單一語系 MP4")
+        if subtitle_form == "burned" and container not in {None, "mp4"}:
+            raise ValueError("燒錄字幕成品為 MP4")
         video = self.library.get_video(video_id)
         if video["deleting"]:
             raise ValueError("影片刪除中")
@@ -571,7 +583,14 @@ class ExportService:
         ) as temp:
             if subtitle_form == "burned":
                 # A short trial encode proves VideoToolbox and the subtitle render up front.
-                self.exporter.burn(source, tracks[0], Path(temp), Event(), preview=True)
+                self.exporter.burn(
+                    source,
+                    tracks[0],
+                    Path(temp),
+                    Event(),
+                    preview=True,
+                    original=tracks[1] if len(tracks) > 1 else None,
+                )
                 container = "mp4"
             elif container is None:
                 container = self.exporter.preview(source, tracks, Path(temp), Event())
@@ -646,7 +665,14 @@ class ExportService:
 
                 try:
                     if burned:
-                        output = self.exporter.burn(source, tracks[0], directory, cancel, report)
+                        output = self.exporter.burn(
+                            source,
+                            tracks[0],
+                            directory,
+                            cancel,
+                            report,
+                            original=tracks[1] if len(tracks) > 1 else None,
+                        )
                     else:
                         output = self.exporter.mux(
                             source, tracks, snapshot.container, directory, cancel
