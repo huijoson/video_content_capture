@@ -14,6 +14,14 @@ from pydantic import BaseModel, Field
 from video_content_capture import __version__
 from video_content_capture.workspace.config import WorkspaceSettings, validate_binding
 from video_content_capture.workspace.exports import ExportService, MediaExporter
+from video_content_capture.workspace.flows import (
+    BUSY_MESSAGE,
+    FlowChoice,
+    FlowConflictError,
+    FlowError,
+    FlowKeyError,
+    FlowService,
+)
 from video_content_capture.workspace.jobs import JobLanes, MediaQueue
 from video_content_capture.workspace.previews import Encoder, PreviewService
 from video_content_capture.workspace.qa import QAAdapter
@@ -103,6 +111,15 @@ class ConfirmExportRequest(BaseModel):
     snapshot: dict[str, object]
 
 
+class FlowRequest(BaseModel):
+    """The confirm-screen choices; the flow freezes them so later edits cannot matter."""
+
+    height: int = Field(gt=0, le=100_000)
+    target_language: str = Field(min_length=1, max_length=50)
+    include_original: bool = False
+    subtitle_form: SubtitleForm = "burned"
+
+
 class PreviewRequest(BaseModel):
     asset_id: str = Field(max_length=32)
 
@@ -147,6 +164,9 @@ def create_app(
         ),
         MediaQueue(library, downloader, handlers={"qa": qa.run}, name="workspace-qa"),
     )
+    flows = FlowService(library, settings, acquisition, translation, exporter)
+    flows.bind(queue.enqueue)
+    queue.bind(flows.on_job_finished)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -578,6 +598,51 @@ def create_app(
             return FileResponse(path, media_type="video/mp4")
         except (ValueError, OSError):
             raise HTTPException(404, "預覽不存在") from None
+
+    @app.get("/api/videos/{video_id}/flow")
+    def flow_confirm(
+        video_id: str,
+        height: Annotated[int | None, Query(gt=0, le=100_000)] = None,
+        target_language: Annotated[str | None, Query(max_length=50)] = None,
+    ) -> Record:
+        """Read-only confirm screen: what the flow will do before the user commits."""
+        try:
+            payload = flows.confirm(video_id, height, target_language)
+        except FlowError as error:
+            raise HTTPException(400, str(error)) from None
+        except (KeyError, ValueError) as error:
+            raise HTTPException(404, "影片不存在或尚未查詢來源") from error
+        payload["title"] = public_text(str(payload["title"]), settings)
+        return payload
+
+    @app.post("/api/videos/{video_id}/flows")
+    def start_flow(video_id: str, body: FlowRequest) -> Record:
+        try:
+            flow, job = flows.start(
+                video_id,
+                FlowChoice(
+                    height=body.height,
+                    target_language=public_text(body.target_language, settings),
+                    include_original=body.include_original,
+                    subtitle_form=body.subtitle_form,
+                ),
+            )
+        except FlowKeyError as error:
+            raise HTTPException(409, str(error)) from None
+        except FlowConflictError:
+            raise HTTPException(409, BUSY_MESSAGE) from None
+        except FlowError as error:
+            raise HTTPException(400, str(error)) from None
+        except (KeyError, ValueError) as error:
+            raise HTTPException(404, "影片不存在或尚未查詢來源") from error
+        return {**flows.status(str(flow["id"])), "job": job}
+
+    @app.get("/api/flows/{flow_id}")
+    def flow_status(flow_id: str) -> Record:
+        try:
+            return flows.status(flow_id)
+        except (KeyError, ValueError):
+            raise HTTPException(404, "流程不存在") from None
 
     @app.get("/api/videos/{video_id}/deletion")
     def deletion_scope(video_id: str) -> Record:
