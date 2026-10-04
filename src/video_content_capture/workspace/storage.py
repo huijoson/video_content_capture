@@ -537,6 +537,27 @@ class Library:
 
         return self.publish_attempt(job_id, attempt, checkpoint, complete=False)
 
+    def release_stages(self, connection: sqlite3.Connection, job_id: str) -> list[Path]:
+        """Drop a completed job's stage rows inside its publish transaction.
+
+        Returns the stage files to remove once that transaction has committed.
+        """
+        paths = [
+            Path(str(row[0]))
+            for row in connection.execute("SELECT path FROM job_stages WHERE job_id=?", (job_id,))
+        ]
+        connection.execute("DELETE FROM job_stages WHERE job_id=?", (job_id,))
+        return paths
+
+    def remove_stage_files(self, paths: list[Path]) -> None:
+        """Best-effort unlink of released stage files; never follows links."""
+        for relative in paths:
+            try:
+                with self._directory(relative.parent) as directory:
+                    os.unlink(relative.name, dir_fd=directory)
+            except (ValueError, OSError):
+                pass
+
     def assets(self, video_id: str) -> list[Record]:
         with self._connect() as connection:
             return self._records(
