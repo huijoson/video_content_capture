@@ -1,6 +1,7 @@
 """Single media worker with explicit retries and guarded publication."""
 
 import hashlib
+import logging
 import shutil
 import sqlite3
 import threading
@@ -10,6 +11,7 @@ from tempfile import TemporaryDirectory
 from typing import BinaryIO
 from uuid import uuid4
 
+from video_content_capture.redaction import scrub_text
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.youtube import (
     DownloadStages,
@@ -17,6 +19,22 @@ from video_content_capture.workspace.youtube import (
     SourceMetadata,
     YoutubeAdapter,
 )
+
+logger = logging.getLogger("vcc.workspace")
+FAILURE_MESSAGE_LIMIT = 300
+
+
+def log_download_failure(job_id: str, stage: str, code: str, error: Exception) -> None:
+    """One redacted diagnostic line; never keys, subtitle text, questions or answers."""
+    message = " ".join(scrub_text(str(error)).split())[:FAILURE_MESSAGE_LIMIT]
+    logger.warning(
+        "Download failure job=%s stage=%s code=%s error=%s message=%s",
+        job_id,
+        stage,
+        code,
+        type(error).__name__,
+        message,
+    )
 
 
 def checksum(path: Path) -> str:
@@ -175,6 +193,8 @@ class MediaQueue:
             str(job[key]) for key in ("video_id", "format_id", "audio_id")
         )
         identity = fingerprint(format_id, audio_id)
+        current = ["download"]
+        released: list[Path] = []
         try:
             video = self.library.get_video(video_id)
             for asset in self.library.assets(video_id):
@@ -191,7 +211,12 @@ class MediaQueue:
                     except (ValueError, OSError):
                         reusable = False
                     if reusable:
-                        self.library.publish_attempt(job_id, attempt, lambda db: None)
+                        if self.library.publish_attempt(
+                            job_id,
+                            attempt,
+                            lambda db: released.extend(self.library.release_stages(db, job_id)),
+                        ):
+                            self.library.remove_stage_files(released)
                         return
             source = SourceMetadata.model_validate_json(str(video["metadata"]))
             fresh = self.adapter.query(source.source_url, cancel)
@@ -209,6 +234,7 @@ class MediaQueue:
 
             def progress(stage: str, done: int | None, total: int | None) -> None:
                 fraction = min(done / total, 1) if done is not None and total else None
+                current[0] = stage
                 self.library.update_attempt(job_id, attempt, stage, fraction)
 
             with TemporaryDirectory(
@@ -257,16 +283,21 @@ class MediaQueue:
                             media.container,
                         ),
                     )
+                    # Stages are kept for retries until the source is published.
+                    released.extend(self.library.release_stages(db, job_id))
 
                 try:
-                    self.library.publish_attempt(job_id, attempt, publish)
+                    if self.library.publish_attempt(job_id, attempt, publish):
+                        self.library.remove_stage_files(released)
                 except Exception:
                     for target in published:
                         target.unlink(missing_ok=True)
                     raise
         except SourceError as error:
+            log_download_failure(job_id, current[0], error.code, error)
             self.library.update_attempt(job_id, attempt, "failed", error=error.code)
-        except Exception:
+        except Exception as error:
+            log_download_failure(job_id, current[0], "media_failed", error)
             self.library.update_attempt(job_id, attempt, "failed", error="media_failed")
 
 

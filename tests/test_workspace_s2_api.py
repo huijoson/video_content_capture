@@ -318,3 +318,91 @@ def test_metadata_is_redacted_before_persistence(tmp_path: Path) -> None:
         assert response.status_code == 200
         assert secret not in response.text
     assert secret.encode() not in (tmp_path / "outputs/library/library.sqlite3").read_bytes()
+
+
+class StagingAdapter(FakeAdapter):
+    """Checkpoints a stage, then fails with ``self.failure`` or publishes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure: Exception | None = None
+
+    def download(self, source, format_id, audio_id, directory, cancel, progress, stages=None):
+        assert stages is not None
+        if stages.load("video", format_id) is None:
+            stream = directory / "video.part"
+            stream.write_bytes(b"staged")
+            stages.save("video", format_id, stream)
+        progress("merge", None, None)
+        if self.failure is not None:
+            raise self.failure
+        return super().download(source, format_id, audio_id, directory, cancel, progress, stages)
+
+
+def staging_queue(tmp_path: Path):
+    library, _, _, job = setup_queue(tmp_path)
+    adapter = StagingAdapter()
+    return library, adapter, MediaQueue(library, adapter), job
+
+
+def stage_files(library: Library, job: dict) -> list[Path]:
+    return sorted((library.video_dir(str(job["video_id"])) / "source").glob("stage-*.bin"))
+
+
+def test_download_failure_logs_one_redacted_line_and_keeps_stages(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    from video_content_capture.redaction import clear_secrets, register_secrets
+
+    secret = "download-key-sentinel"
+    library, adapter, queue, job = staging_queue(tmp_path)
+    adapter.failure = RuntimeError(f"boom key={secret}\nsecond line")
+    register_secrets([secret])
+    try:
+        with caplog.at_level(logging.WARNING, logger="vcc.workspace"):
+            queue.process(str(job["id"]), Event())
+    finally:
+        clear_secrets()
+    assert library.get_job(str(job["id"]))["error_code"] == "media_failed"
+    records = [r for r in caplog.records if r.name == "vcc.workspace"]
+    assert len(records) == 1 and records[0].levelno == logging.WARNING
+    line = records[0].getMessage()
+    for part in (str(job["id"]), "stage=merge", "code=media_failed", "RuntimeError", "[REDACTED]"):
+        assert part in line
+    assert secret not in line and "\n" not in line
+    # The verified stage survives so a manual retry resumes instead of re-downloading.
+    assert len(stage_files(library, job)) == 1
+    assert len(library.stage_records(str(job["id"]))) == 1
+
+
+def test_source_error_failure_is_logged_with_its_code(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    from video_content_capture.workspace.youtube import SourceError
+
+    library, adapter, queue, job = staging_queue(tmp_path)
+    adapter.failure = SourceError("source_unavailable", "來源不支援／無法取得")
+    with caplog.at_level(logging.WARNING, logger="vcc.workspace"):
+        queue.process(str(job["id"]), Event())
+    records = [r for r in caplog.records if r.name == "vcc.workspace"]
+    assert len(records) == 1
+    assert "code=source_unavailable" in records[0].getMessage()
+    assert len(stage_files(library, job)) == 1
+
+
+def test_published_download_removes_its_stage_files(tmp_path: Path) -> None:
+    library, adapter, queue, job = staging_queue(tmp_path)
+    adapter.failure = RuntimeError("transient")
+    queue.process(str(job["id"]), Event())
+    assert len(stage_files(library, job)) == 1
+    adapter.failure = None
+    library.retry_job(str(job["id"]))
+    queue.process(str(job["id"]), Event())
+    assert library.get_job(str(job["id"]))["status"] == "completed"
+    assert len(library.assets(str(job["video_id"]))) == 1
+    assert stage_files(library, job) == []
+    assert library.stage_records(str(job["id"])) == []
