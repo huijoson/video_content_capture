@@ -463,8 +463,8 @@ def test_bilingual_target_margin_reserves_wrapped_original_block() -> None:
                 block = rendered * round(layout.original_font_size * LINE_SPACING)
                 gap = round(layout.original_font_size * BAND_GAP_SCALE)
                 if layout.margin_vertical + block + gap <= layout.margin_limit:
-                    # The reservation covers every rendered line at the pitch libass
-                    # actually uses (measured 1.0 em), so the target stays above the block.
+                    # Every line of the block is reserved at the assumed pitch, so the
+                    # target's margin reaches below the original's rendered block.
                     assert rendered * layout.original_font_size <= target - bottom
                 else:
                     # A block taller than the cap cannot be reserved; the margin stops
@@ -525,6 +525,16 @@ def test_bilingual_margin_clamp_keeps_target_on_screen() -> None:
         assert styles["BilingualOriginal"][21] == str(layout.margin_vertical)
         # The clamp is a style-level margin: no injected positioning reaches the text.
         assert "\\pos" not in ass and "{" not in ass.replace("\\{", "")
+    # Degenerate frames shorter than three font sizes: the floor keeps the target on
+    # screen instead of letting half the height reserve it off the top edge.
+    for width, height in ((1920, 20), (16, 16), (640, 12)):
+        layout = SubtitleLayout(width, height)
+        assert 0 <= layout.margin_limit <= height - layout.font_size
+        cue = Cue(id="big", start=1.0, end=2.0, text="字" * 400)
+        ass = render_ass([cue], "zh-TW", layout, original=([cue], "en"))
+        margin = int(_ass_styles(ass)["BilingualTarget"][21])
+        # The target's line top (above its bottom margin) never leaves the frame.
+        assert 0 <= height - margin - layout.font_size
 
 
 def test_bilingual_target_uses_its_own_ass_layer() -> None:

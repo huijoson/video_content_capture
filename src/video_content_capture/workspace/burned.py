@@ -133,7 +133,9 @@ class SubtitleLayout:
     @property
     def margin_limit(self) -> int:
         """Hard ceiling for the target's bottom margin, so the target stays on screen."""
-        return round(self.height * MARGIN_CLAMP_SCALE)
+        # On a degenerate frame shorter than three font sizes, half the height would
+        # leave no room for the target line itself, so the line always stays inside.
+        return max(0, min(round(self.height * MARGIN_CLAMP_SCALE), self.height - self.font_size))
 
     def bilingual_margin_vertical(self, original_lines: int) -> int:
         """Bottom margin that lifts the target line clear of the original's rendered block.

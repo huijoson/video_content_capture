@@ -511,6 +511,8 @@ class ExportSnapshot(BaseModel):
     def _burned_shape(self) -> Self:
         if self.subtitle_form == "burned" and (
             # Bilingual burning is one MP4 with the target and original rendered together.
+            # `len(self.tracks) > 2` is unreachable while the field caps at two tracks,
+            # and stays as a guard should that bound ever widen.
             self.container != "mp4" or len(self.tracks) > 2
         ):
             raise ValueError("Burned exports are one or two languages in MP4")
