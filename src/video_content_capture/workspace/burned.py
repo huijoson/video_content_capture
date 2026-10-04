@@ -4,7 +4,10 @@ Burned exports always re-encode (ADR 0004): H.264 through VideoToolbox plus AAC 
 at the source resolution. The subtitle style is fixed: white text with a black outline,
 bottom centre, size scaled to the video height and a CJK-capable macOS system font.
 Bilingual burning keeps the target language on top and the original below it in a
-smaller font, each version following its own cue times in its own style.
+smaller font, each version following its own cue times in its own style. Each version
+wraps at its own font size, and the target's bottom margin reserves the original's whole
+rendered block — the tallest original cue, in lines — so a wrapped original can never
+push itself above the target nor move once the target cue ends.
 """
 
 import unicodedata
@@ -20,7 +23,10 @@ MARGIN_SCALE = 0.05
 ORIGINAL_FONT_SCALE = 0.035
 # Gap between the two bilingual bands, as a share of the original line's font size.
 BAND_GAP_SCALE = 0.5
-# libass line advance as a share of the font size, when stacking the two lines.
+# Upper bound on libass's line advance and on the glyph height in one line, as shares
+# of the font size: measured 1.0 em pitch and at most 0.92 em of glyphs for the macOS
+# system fonts behind every subtitle language, so reserving `lines * LINE_SPACING`
+# always covers a block of `lines` rendered lines.
 LINE_SPACING = 1.2
 DEFAULT_STYLE = "Default"
 TARGET_STYLE = "BilingualTarget"
@@ -29,6 +35,11 @@ ORIGINAL_STYLE = "BilingualOriginal"
 # space-separated text, but it never breaks CJK runs, so lines are wrapped here.
 WIDE_ADVANCE = 1.0
 NARROW_ADVANCE = 0.5
+# The original is wrapped counting every glyph as this wide. Its rendered line count
+# sets the target's bottom margin, so the estimate must exceed any real advance
+# (measured worst case ~1.0 em for fullwidth glyphs) or libass could break one of the
+# emitted lines again and need more lines than were reserved.
+ORIGINAL_ADVANCE = 1.05
 # Closing punctuation never starts a line (simple kinsoku rule).
 _NO_LINE_START = set("，。、！？；：）」』】》〉,.!?;:)]}%”’…")
 AUDIO_BITRATE = 192_000
@@ -95,12 +106,16 @@ class SubtitleLayout:
     def margin_vertical(self) -> int:
         return round(self.height * MARGIN_SCALE)
 
-    @property
-    def target_margin_vertical(self) -> int:
-        """Bottom margin that lifts the target line clear of the original line below."""
-        original_line = round(self.original_font_size * LINE_SPACING)
+    def bilingual_margin_vertical(self, original_lines: int) -> int:
+        """Bottom margin that lifts the target line clear of the original's rendered block.
+
+        ``original_lines`` is the tallest original cue, in rendered lines: the whole
+        block is reserved below the target, otherwise a wrapped original collides with
+        the target and libass lifts the original above it.
+        """
+        block = max(1, original_lines) * round(self.original_font_size * LINE_SPACING)
         gap = round(self.original_font_size * BAND_GAP_SCALE)
-        return self.margin_vertical + original_line + gap
+        return self.margin_vertical + block + gap
 
     @property
     def margin_horizontal(self) -> int:
@@ -111,9 +126,18 @@ class SubtitleLayout:
         """Usable line width in em."""
         return max(1.0, (self.width - 2 * self.margin_horizontal) / self.font_size)
 
+    @property
+    def original_line_width(self) -> float:
+        """The original wraps at its own font size, so it fits more text per line."""
+        usable = self.width - 2 * self.margin_horizontal
+        return max(1.0, usable / self.original_font_size)
 
-def _advance(char: str) -> float:
-    return WIDE_ADVANCE if unicodedata.east_asian_width(char) in {"W", "F"} else NARROW_ADVANCE
+
+def _advance(char: str, narrow_advance: float) -> float:
+    """Estimated advance in em; the wider of the caller's floor and the glyph's class."""
+    if unicodedata.east_asian_width(char) in {"W", "F"}:
+        return max(WIDE_ADVANCE, narrow_advance)
+    return narrow_advance
 
 
 def _units(line: str) -> list[str]:
@@ -134,12 +158,12 @@ def _units(line: str) -> list[str]:
     return units
 
 
-def wrap_line(line: str, width: float) -> list[str]:
+def wrap_line(line: str, width: float, narrow_advance: float = NARROW_ADVANCE) -> list[str]:
     """Greedy wrap by estimated advance; long narrow words are split by character."""
     lines: list[str] = []
     current, used = "", 0.0
     for unit in _units(line):
-        size = sum(_advance(char) for char in unit)
+        size = sum(_advance(char, narrow_advance) for char in unit)
         if unit.isspace():
             if current:
                 current, used = current + unit, used + size
@@ -149,10 +173,10 @@ def wrap_line(line: str, width: float) -> list[str]:
             current, used = "", 0.0
         if size > width:
             for char in unit:
-                if current and used + _advance(char) > width:
+                if current and used + _advance(char, narrow_advance) > width:
                     lines.append(current.rstrip())
                     current, used = "", 0.0
-                current, used = current + char, used + _advance(char)
+                current, used = current + char, used + _advance(char, narrow_advance)
             continue
         current, used = current + unit, used + size
     if current.strip():
@@ -212,12 +236,16 @@ def _style_line(
     )
 
 
-def _dialogue(cue: Cue, style: str, layout: SubtitleLayout) -> str | None:
-    wrapped = [
+def _wrapped_lines(cue: Cue, width: float, narrow_advance: float) -> list[str]:
+    return [
         _ass_text(part)
         for source_line in cue.text.splitlines()
-        for part in wrap_line(source_line, layout.line_width)
+        for part in wrap_line(source_line, width, narrow_advance)
     ]
+
+
+def _dialogue(cue: Cue, style: str, width: float, narrow_advance: float) -> str | None:
+    wrapped = _wrapped_lines(cue, width, narrow_advance)
     if not wrapped:
         return None
     # ASS keeps centiseconds; rounding must never collapse a cue to zero length.
@@ -251,12 +279,17 @@ def render_ass(
     events: list[str] = []
     if original is None:
         for cue in cues:
-            line = _dialogue(cue, DEFAULT_STYLE, layout)
+            line = _dialogue(cue, DEFAULT_STYLE, layout.line_width, NARROW_ADVANCE)
             if line:
                 events.append(line)
     else:
         original_cues, original_language = original
-        target_margin = layout.target_margin_vertical
+        original_width = layout.original_line_width
+        tallest = max(
+            (len(_wrapped_lines(cue, original_width, ORIGINAL_ADVANCE)) for cue in original_cues),
+            default=1,
+        )
+        target_margin = layout.bilingual_margin_vertical(tallest)
         styles = [
             _style_line(
                 TARGET_STYLE,
@@ -277,11 +310,11 @@ def render_ass(
         ]
         # Each version follows its own timing: cues are never merged or re-timed.
         for cue in cues:
-            line = _dialogue(cue, TARGET_STYLE, layout)
+            line = _dialogue(cue, TARGET_STYLE, layout.line_width, NARROW_ADVANCE)
             if line:
                 events.append(line)
         for cue in original_cues:
-            line = _dialogue(cue, ORIGINAL_STYLE, layout)
+            line = _dialogue(cue, ORIGINAL_STYLE, original_width, ORIGINAL_ADVANCE)
             if line:
                 events.append(line)
     lines = [

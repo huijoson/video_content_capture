@@ -16,7 +16,13 @@ from fastapi.testclient import TestClient
 from tests.test_workspace_s2_api import FakeAdapter
 from video_content_capture.workspace import exports
 from video_content_capture.workspace.app import create_app
-from video_content_capture.workspace.burned import SubtitleLayout, render_ass, wrap_line
+from video_content_capture.workspace.burned import (
+    LINE_SPACING,
+    ORIGINAL_ADVANCE,
+    SubtitleLayout,
+    render_ass,
+    wrap_line,
+)
 from video_content_capture.workspace.config import load_settings
 from video_content_capture.workspace.exports import ExportTrack, MediaExporter
 from video_content_capture.workspace.storage import Library
@@ -24,6 +30,13 @@ from video_content_capture.workspace.subtitles import Cue
 from video_content_capture.workspace.youtube import SourceError
 
 ORIGIN = {"Origin": "http://127.0.0.1:8765"}
+
+# Long enough to wrap to several rendered lines at every resolution, at the original's
+# own font size, so it exercises the multi-line band reservation below the target.
+WRAPPED_ORIGINAL = (
+    "the storm will pass before the river reaches the door, and the lights will come back on "
+    "again, or so I kept telling myself while the wind shook the glass"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -406,6 +419,63 @@ def test_migration_marks_existing_artifacts_as_tracks(tmp_path: Path) -> None:
     assert [(a["id"], a["subtitle_form"]) for a in artifacts] == [("old", "tracks")]
 
 
+def _ass_styles(ass: str) -> dict[str, list[str]]:
+    return {
+        fields[0]: fields
+        for line in ass.splitlines()
+        if line.startswith("Style: ")
+        for fields in [line.removeprefix("Style: ").split(",")]
+    }
+
+
+def test_bilingual_target_margin_reserves_wrapped_original_block() -> None:
+    """A wrapped original must never be lifted above the target by collision avoidance."""
+    texts = [
+        "orig text",
+        WRAPPED_ORIGINAL,
+        " ".join(["word"] * 40),
+        "這是一段很長的繁體中文字幕用來測試自動換行是否正常運作而且不會超出畫面範圍並持續延伸下去",
+    ]
+    for width, height in ((640, 360), (1280, 720), (1920, 1080)):
+        layout = SubtitleLayout(width, height)
+        # The original wraps at its own font size, so it keeps more text per line.
+        assert layout.original_line_width > layout.line_width
+        counts: set[int] = set()
+        margins: dict[str, int] = {}
+        for text in texts:
+            for lines in (1, 2, 3):
+                cues = (Cue(id="two", start=1.0, end=2.0, text="\n".join([text] * lines)),)
+                ass = render_ass(cues, "zh-TW", layout, original=(cues, "en"))
+                styles = _ass_styles(ass)
+                assert set(styles) == {"BilingualTarget", "BilingualOriginal"}
+                rendered = sum(
+                    len(wrap_line(part, layout.original_line_width, ORIGINAL_ADVANCE))
+                    for part in [text] * lines
+                )
+                counts.add(rendered)
+                target, bottom = (
+                    int(styles["BilingualTarget"][21]),
+                    int(styles["BilingualOriginal"][21]),
+                )
+                # The reservation must cover every rendered line at the pitch libass
+                # actually uses (measured 1.0 em), so the target stays above the block.
+                assert rendered * layout.original_font_size <= target - bottom
+                assert LINE_SPACING >= 1.0
+                # The hard-coded single-line band #5 first shipped would not have covered it.
+                if rendered > 1:
+                    assert target > bottom + round(layout.original_font_size * LINE_SPACING)
+                # The original keeps its own style: smaller font, its own bottom margin.
+                assert styles["BilingualOriginal"][2] == str(layout.original_font_size)
+                assert bottom == layout.margin_vertical
+                margins[f"{rendered}"] = target
+                # Wrapping never lets subtitle text inject an ASS override tag.
+                assert "\\pos" not in ass and "{" not in ass.replace("\\{", "")
+        # The band covers single-line and multi-line originals alike.
+        assert {1, 2} <= counts and max(counts) >= 3
+        # The reserved band grows with the original's line count.
+        assert int(margins["1"]) < int(margins["2"]) < int(margins["3"])
+
+
 def test_long_lines_wrap_within_frame_and_text_cannot_inject_tags() -> None:
     layout = SubtitleLayout(640, 360)
     long_cjk = "這是一段很長的繁體中文字幕用來測試自動換行是否正常運作而且不會超出畫面範圍"
@@ -545,10 +615,15 @@ def test_burned_export_real_ffmpeg(
 
 
 def _burn_real(
-    tmp_path: Path, name: str, *, target: ExportTrack, original: ExportTrack | None
+    tmp_path: Path,
+    name: str,
+    *,
+    target: ExportTrack,
+    original: ExportTrack | None,
+    width: int = 640,
+    height: int = 360,
 ) -> tuple[Path, Path]:
     """A short flat-colour MP4 plus the real burned output for one subtitle set."""
-    width, height = 640, 360
     source = tmp_path / f"source-{name}.mp4"
     subprocess.run(
         ["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i"]
@@ -629,6 +704,74 @@ def test_bilingual_burn_real_ffmpeg_stacks_target_above_smaller_original(tmp_pat
     assert abs(tail_span.start - bottom_span.start) <= 2
     assert abs(tail_span.stop - bottom_span.stop) <= 2
     # Outside every cue window the burned picture stays identical to the source.
+    assert _bands_at(both_source, both_burn, 0.5, width, height) == []
+
+
+@pytest.mark.skipif(not _vt_available(), reason="ffmpeg with VideoToolbox H.264 is unavailable")
+@pytest.mark.parametrize(("width", "height"), [(640, 360), (1920, 1080)])
+def test_bilingual_burn_real_ffmpeg_keeps_wrapped_original_below_target(
+    tmp_path: Path, width: int, height: int
+) -> None:
+    """A multi-line original must not be lifted above the target by collision avoidance."""
+    layout = SubtitleLayout(width, height)
+    target = ExportTrack(
+        version_id="target",
+        language="zh-TW",
+        name="target",
+        srt="",
+        cues=(Cue(id="one", start=1.0, end=2.0, text="繁體中文字幕"),),
+    )
+    original = ExportTrack(
+        version_id="original",
+        language="en",
+        name="original",
+        srt="",
+        # Its own timing, and long enough to wrap to several rendered lines.
+        cues=(Cue(id="two", start=0.6, end=2.4, text=WRAPPED_ORIGINAL),),
+    )
+    alone_source, alone_burn = _burn_real(
+        tmp_path, f"alone-{width}", target=target, original=None, width=width, height=height
+    )
+    both_source, both_burn = _burn_real(
+        tmp_path, f"both-{width}", target=target, original=original, width=width, height=height
+    )
+
+    # The single-language burn gives the target text its own glyph signature.
+    alone_band = _bands_at(alone_source, alone_burn, 1.5, width, height)[0]
+    alone = _mask(_gray_frame(alone_source, 1.5), _gray_frame(alone_burn, 1.5))
+
+    # The original wraps to several rendered lines, the case that used to collide.
+    wrapped_lines = wrap_line(WRAPPED_ORIGINAL, layout.original_line_width, ORIGINAL_ADVANCE)
+    assert len(wrapped_lines) >= 2, wrapped_lines
+
+    # While both cues are live the target sits on top and the original block below it.
+    blocks = _bands_at(both_source, both_burn, 1.5, width, height, max_gap=8)
+    assert len(blocks) == 2, blocks
+    top, below = blocks
+    assert top.stop <= below.start, blocks
+    frame = _mask(_gray_frame(both_source, 1.5), _gray_frame(both_burn, 1.5))
+    # The top band holds the target text: the same glyph run as the target-only burn.
+    top_span = _ink_columns(frame, width, top)
+    alone_span = _ink_columns(alone, width, alone_band)
+    assert abs(top_span.start - alone_span.start) <= 4
+    assert abs(top_span.stop - alone_span.stop) <= 4
+    assert abs(len(top) - len(alone_band)) <= 4
+    # The bottom band spans several line pitches, so the original really did wrap.
+    assert len(below) >= (len(wrapped_lines) - 1) * layout.original_font_size + 1, below
+    # A single target line cannot account for that height.
+    assert len(below) > len(top)
+    # The target sits exactly in the band reserved for it, so collision avoidance
+    # never had to lift it: a short band would mean the original pushed it upward.
+    target_margin = layout.bilingual_margin_vertical(len(wrapped_lines))
+    assert abs((height - top.stop) - target_margin) <= 6, (top, target_margin)
+
+    # The original keeps its own place: its block bottom sits at its own bottom margin.
+    assert abs((height - below.stop) - layout.margin_vertical) <= 6, below
+
+    # When the target cue ends the original neither moves nor jumps.
+    after = _bands_at(both_source, both_burn, 2.2, width, height, max_gap=8)
+    assert len(after) == 1, after
+    assert after[0] == below
     assert _bands_at(both_source, both_burn, 0.5, width, height) == []
 
 
