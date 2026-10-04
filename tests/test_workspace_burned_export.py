@@ -266,16 +266,121 @@ def test_tracks_form_keeps_existing_matrix_and_burned_rejects_extra_tracks(
         assert client.get(f"/api/videos/{video_id}").json()["exports"][0]["subtitle_form"] == (
             "tracks"
         )
-        assert preview(client, video_id, target, subtitle_form="burned", **both).status_code == 400
+        # Burned bilingual is still one MP4; MKV and a missing original are refused.
         mkv = preview(client, video_id, target, subtitle_form="burned", container="mkv")
         assert mkv.status_code == 400
-        tampered = {**default, "subtitle_form": "burned"}
         assert (
-            client.post(
-                f"/api/videos/{video_id}/exports", json={"snapshot": tampered}, headers=ORIGIN
+            preview(
+                client, video_id, target, subtitle_form="burned", include_original=True
             ).status_code
             == 400
         )
+        tampered = {**default, "subtitle_form": "burned"}
+        # Tampering the form on an MKV tracks snapshot is still rejected by the schema.
+        assert (
+            client.post(
+                f"/api/videos/{video_id}/exports",
+                json={"snapshot": {**tampered, "container": "mkv"}},
+                headers=ORIGIN,
+            ).status_code
+            == 400
+        )
+        # A burned snapshot cannot smuggle in a third track.
+        three = {
+            **tampered,
+            "tracks": default["tracks"] + [default["tracks"][0]],
+        }
+        assert (
+            client.post(
+                f"/api/videos/{video_id}/exports", json={"snapshot": three}, headers=ORIGIN
+            ).status_code
+            == 400
+        )
+
+
+def test_bilingual_burned_export_stacks_target_above_smaller_original(tmp_path: Path) -> None:
+    runner = FakeFFmpeg()
+    client, library, video_id, _, target = make_client(tmp_path, runner)
+    # The original version keeps its own cue times, different from the target's.
+    original = library.create_subtitle_version(
+        video_id,
+        "en",
+        "original offset",
+        "import",
+        [Cue(id="two", start=0.2, end=0.7, text="the original line")],
+    )
+    with client:
+        response = preview(
+            client,
+            video_id,
+            target,
+            include_original=True,
+            original_version_id=original["id"],
+            subtitle_form="burned",
+        )
+        assert response.status_code == 200
+        snapshot = response.json()
+        assert snapshot["include_original"] is True
+        assert snapshot["subtitle_form"] == "burned"
+        assert [track["version_id"] for track in snapshot["tracks"]] == [
+            target["id"],
+            original["id"],
+        ]
+        job = client.post(
+            f"/api/videos/{video_id}/exports", json={"snapshot": snapshot}, headers=ORIGIN
+        ).json()
+        assert wait_job(client, job["id"])["status"] == "completed"
+        artifact = client.get(f"/api/videos/{video_id}").json()["exports"][0]
+        assert artifact["subtitle_form"] == "burned"
+        # The artifact snapshot keeps the bilingual flag for reproducibility.
+        assert json.loads(artifact["summary"]) == snapshot
+    ass = runner.subtitles[-1]
+    styles = {
+        line.removeprefix("Style: ").split(",")[0]: line.removeprefix("Style: ").split(",")
+        for line in ass.splitlines()
+        if line.startswith("Style: ")
+    }
+    assert set(styles) == {"BilingualTarget", "BilingualOriginal"}
+    # The target line is bigger and sits above the original line in the same frame.
+    assert int(styles["BilingualTarget"][2]) > int(styles["BilingualOriginal"][2])
+    assert int(styles["BilingualTarget"][21]) > int(styles["BilingualOriginal"][21])
+    assert styles["BilingualTarget"][3] == "&H00FFFFFF"  # white text, black edge
+    assert styles["BilingualTarget"][5] == "&H00000000"
+    assert styles["BilingualTarget"][18] == styles["BilingualOriginal"][18] == "2"
+    assert styles["BilingualTarget"][1] == "Heiti TC"  # zh-TW target
+    assert styles["BilingualOriginal"][1] == "Hiragino Sans GB"  # English original
+    # Each version keeps its own cue times: nothing is merged or re-timed.
+    dialogues = [line for line in ass.splitlines() if line.startswith("Dialogue: ")]
+    assert dialogues == [
+        "Dialogue: 0,0:00:00.00,0:00:00.50,BilingualTarget,,0,0,0,,original",
+        "Dialogue: 0,0:00:00.20,0:00:00.70,BilingualOriginal,,0,0,0,,the original line",
+    ]
+
+
+def test_burned_same_version_on_both_sides_renders_one_line(tmp_path: Path) -> None:
+    runner = FakeFFmpeg()
+    client, _, video_id, _, target = make_client(tmp_path, runner)
+    with client:
+        response = preview(
+            client,
+            video_id,
+            target,
+            include_original=True,
+            original_version_id=target["id"],
+            subtitle_form="burned",
+        )
+        assert response.status_code == 200
+        snapshot = response.json()
+        assert [track["version_id"] for track in snapshot["tracks"]] == [target["id"]]
+        job = client.post(
+            f"/api/videos/{video_id}/exports", json={"snapshot": snapshot}, headers=ORIGIN
+        ).json()
+        assert wait_job(client, job["id"])["status"] == "completed"
+    ass = runner.subtitles[-1]
+    assert "BilingualTarget" not in ass and "BilingualOriginal" not in ass
+    assert [line for line in ass.splitlines() if line.startswith("Dialogue: ")] == [
+        "Dialogue: 0,0:00:00.00,0:00:00.50,Default,,0,0,0,,original"
+    ]
 
 
 def test_migration_marks_existing_artifacts_as_tracks(tmp_path: Path) -> None:
@@ -346,6 +451,41 @@ def _difference(a: bytes, b: bytes, width: int, rows: range, columns: range) -> 
     return total / (len(rows) * len(columns))
 
 
+def _mask(source: bytes, frame: bytes, threshold: int = 30) -> bytearray:
+    """Pixels the burned frame added over the flat source colour: the subtitle ink."""
+    return bytearray(
+        1 if abs(before - after) > threshold else 0
+        for before, after in zip(source, frame, strict=True)
+    )
+
+
+def _bands(mask: bytearray, width: int, height: int, max_gap: int = 8) -> list[range]:
+    """Ink bands top to bottom; lines closer than max_gap rows belong to one band."""
+    bands: list[range] = []
+    start: int | None = None
+    gap = 0
+    for row in range(height):
+        if any(mask[row * width : (row + 1) * width]):
+            if start is None:
+                start = row
+            gap = 0
+        elif start is not None:
+            gap += 1
+            if gap > max_gap:
+                bands.append(range(start, row - gap + 1))
+                start = None
+    if start is not None:
+        bands.append(range(start, height))
+    return bands
+
+
+def _ink_columns(mask: bytearray, width: int, rows: range) -> range:
+    """Horizontal extent of the glyphs in a band."""
+    columns = [x for x in range(width) if any(mask[y * width + x] for y in rows)]
+    assert columns, "the band has no ink"
+    return range(columns[0], columns[-1] + 1)
+
+
 @pytest.mark.skipif(not _vt_available(), reason="ffmpeg with VideoToolbox H.264 is unavailable")
 @pytest.mark.parametrize(
     ("container", "audio", "audio_args"),
@@ -404,6 +544,94 @@ def test_burned_export_real_ffmpeg(
             assert _difference(original, burned, width, rows, columns) < 1
 
 
+def _burn_real(
+    tmp_path: Path, name: str, *, target: ExportTrack, original: ExportTrack | None
+) -> tuple[Path, Path]:
+    """A short flat-colour MP4 plus the real burned output for one subtitle set."""
+    width, height = 640, 360
+    source = tmp_path / f"source-{name}.mp4"
+    subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i"]
+        + [f"color=c=0x336699:s={width}x{height}:r=25", "-f", "lavfi", "-i"]
+        + ["sine=f=440:r=48000", "-t", "3", "-c:v", "libx264", "-pix_fmt", "yuv420p"]
+        + ["-c:a", "aac", str(source)],
+        check=True,
+        capture_output=True,
+    )
+    output = MediaExporter().burn(
+        source, target, tmp_path / f"burn-{name}", Event(), original=original
+    )
+    return source, output
+
+
+def _bands_at(
+    source: Path, frame_path: Path, seconds: float, width: int, height: int, max_gap: int = 2
+) -> list[range]:
+    mask = _mask(_gray_frame(source, seconds), _gray_frame(frame_path, seconds))
+    return _bands(mask, width, height, max_gap)
+
+
+@pytest.mark.skipif(not _vt_available(), reason="ffmpeg with VideoToolbox H.264 is unavailable")
+def test_bilingual_burn_real_ffmpeg_stacks_target_above_smaller_original(tmp_path: Path) -> None:
+    width, height = 640, 360
+    target = ExportTrack(
+        version_id="target",
+        language="zh-TW",
+        name="target",
+        srt="",
+        # Wide glyphs, so the target line is clearly the wider band of the two.
+        cues=(Cue(id="one", start=1.0, end=2.0, text="繁體中文字幕"),),
+    )
+    original = ExportTrack(
+        version_id="original",
+        language="en",
+        name="original",
+        srt="",
+        # Its own timing, offset from the target's: cues are never merged or re-timed.
+        cues=(Cue(id="two", start=1.6, end=2.4, text="orig text"),),
+    )
+    target_source, target_burn = _burn_real(tmp_path, "target", target=target, original=None)
+    both_source, both_burn = _burn_real(tmp_path, "both", target=target, original=original)
+
+    # The single-language burn gives the target text its own glyph signature.
+    alone = _bands_at(target_source, target_burn, 1.3, width, height)
+    assert len(alone) == 1, alone
+    alone_frame = _mask(_gray_frame(target_source, 1.3), _gray_frame(target_burn, 1.3))
+    alone_span = _ink_columns(alone_frame, width, alone[0])
+
+    # Both bands render at once, target on top and the smaller original below it.
+    bands = _bands_at(both_source, both_burn, 1.8, width, height)
+    assert len(bands) == 2, bands
+    top, bottom = bands
+    assert top.stop <= bottom.start
+    frame = _mask(_gray_frame(both_source, 1.8), _gray_frame(both_burn, 1.8))
+    top_span = _ink_columns(frame, width, top)
+    # The top band holds the target text: the same glyph run as the target-only burn.
+    assert abs(top_span.start - alone_span.start) <= 4
+    assert abs(top_span.stop - alone_span.stop) <= 4
+    assert abs(len(top) - len(alone[0])) <= 4
+    # The bottom band is the original in a smaller font: shorter band, narrower text.
+    assert len(bottom) < len(top)
+    bottom_span = _ink_columns(frame, width, bottom)
+    assert bottom_span.stop - bottom_span.start < top_span.stop - top_span.start
+    # The target alone still renders in the same place as in the single-language burn.
+    only_target = _bands_at(both_source, both_burn, 1.3, width, height)
+    assert len(only_target) == 1, only_target
+    target_frame = _mask(_gray_frame(both_source, 1.3), _gray_frame(both_burn, 1.3))
+    target_span = _ink_columns(target_frame, width, only_target[0])
+    assert abs(target_span.start - top_span.start) <= 2
+    assert abs(target_span.stop - top_span.stop) <= 2
+    # Each version keeps its own timing: at 2.2 s only the original is left, in place.
+    tail = _bands_at(both_source, both_burn, 2.2, width, height)
+    assert len(tail) == 1, tail
+    tail_frame = _mask(_gray_frame(both_source, 2.2), _gray_frame(both_burn, 2.2))
+    tail_span = _ink_columns(tail_frame, width, tail[0])
+    assert abs(tail_span.start - bottom_span.start) <= 2
+    assert abs(tail_span.stop - bottom_span.stop) <= 2
+    # Outside every cue window the burned picture stays identical to the source.
+    assert _bands_at(both_source, both_burn, 0.5, width, height) == []
+
+
 def test_reexport_panel_offers_burned_subtitle_form() -> None:
     static = Path(exports.__file__).parent / "static"
     page = (static / "index.html").read_text()
@@ -412,3 +640,7 @@ def test_reexport_panel_offers_burned_subtitle_form() -> None:
     assert '<option value="burned">' in page and '<option value="tracks">' in page
     assert 'subtitle_form: element("export-form").value' in script
     assert "hardware_encoder_unavailable" in script
+    # The export panel offers the bilingual burned toggle instead of forcing it off.
+    assert 'id="include-original"' in page and "雙語" in page
+    assert "目標在上、原文在下" in script
+    assert 'element("include-original").checked = false' not in script.split("updateExportForm")[1]

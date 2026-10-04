@@ -664,11 +664,11 @@ function renderSubtitles(video, preserveSelection = false) {
 for (const [id, selection] of [["translation-source", "translation-source"], ["export-target", "export-selection"]]) {
   element(id).addEventListener("change", () => chooseSubtitle(selection, element(id).value).catch(showError));
 }
-// Burned exports are a single-language MP4; container and extra tracks apply to tracks only.
+// Burned exports are one MP4; container only applies to tracks.
 function updateExportForm() {
   const burned = element("export-form").value === "burned";
-  if (burned) { element("include-original").checked = false; element("export-container").value = ""; }
-  element("include-original").disabled = burned || !currentVideo;
+  if (burned) element("export-container").value = "";
+  element("include-original").disabled = !currentVideo;
   element("export-container").disabled = burned;
 }
 element("export-form").addEventListener("change", updateExportForm);
@@ -744,7 +744,7 @@ element("export-preview").addEventListener("click", async () => {
     if (currentVideo?.id !== id || generation !== exportGeneration) return;
     exportSnapshot = snapshot;
     element("export-summary").textContent = snapshot.subtitle_form === "burned"
-      ? `MP4（H.264 硬體編碼＋AAC，解析度不變）· 燒錄字幕：${snapshot.tracks.map((track) => `${track.language} · ${track.name || track.version_id}`).join("；")}。建立工作後固定此快照。`
+      ? `MP4（H.264 硬體編碼＋AAC，解析度不變）· ${snapshot.tracks.length > 1 ? "雙語燒錄（目標在上、原文在下）" : "燒錄字幕"}：${snapshot.tracks.map((track) => `${track.language} · ${track.name || track.version_id}`).join("；")}。建立工作後固定此快照。`
       : `${snapshot.container.toUpperCase()} · 字幕軌：${snapshot.tracks.map((track) => `${track.language} · ${track.name || track.version_id}`).join("；") || "無字幕"}。建立工作後固定此快照。`;
     element("export-start").disabled = false;
   } catch (error) {

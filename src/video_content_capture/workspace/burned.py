@@ -3,6 +3,8 @@
 Burned exports always re-encode (ADR 0004): H.264 through VideoToolbox plus AAC in MP4,
 at the source resolution. The subtitle style is fixed: white text with a black outline,
 bottom centre, size scaled to the video height and a CJK-capable macOS system font.
+Bilingual burning keeps the target language on top and the original below it in a
+smaller font, each version following its own cue times in its own style.
 """
 
 import unicodedata
@@ -14,6 +16,15 @@ from video_content_capture.workspace.subtitles import Cue
 # Share of the frame height used for the font size, bottom margin and side margins.
 FONT_SCALE = 0.05
 MARGIN_SCALE = 0.05
+# Bilingual burning draws the original below the target in a smaller font.
+ORIGINAL_FONT_SCALE = 0.035
+# Gap between the two bilingual bands, as a share of the original line's font size.
+BAND_GAP_SCALE = 0.5
+# libass line advance as a share of the font size, when stacking the two lines.
+LINE_SPACING = 1.2
+DEFAULT_STYLE = "Default"
+TARGET_STYLE = "BilingualTarget"
+ORIGINAL_STYLE = "BilingualOriginal"
 # Conservative advance estimates in em; libass smart wrapping stays as a backstop for
 # space-separated text, but it never breaks CJK runs, so lines are wrapped here.
 WIDE_ADVANCE = 1.0
@@ -66,8 +77,30 @@ class SubtitleLayout:
         return max(1, round(self.font_size * 0.06))
 
     @property
+    def original_font_size(self) -> int:
+        """The original-language line is always smaller than the target line."""
+        return max(
+            8,
+            min(
+                self.font_size - 1,
+                round(min(self.height, self.width) * ORIGINAL_FONT_SCALE),
+            ),
+        )
+
+    @property
+    def original_outline(self) -> int:
+        return max(1, round(self.original_font_size * 0.06))
+
+    @property
     def margin_vertical(self) -> int:
         return round(self.height * MARGIN_SCALE)
+
+    @property
+    def target_margin_vertical(self) -> int:
+        """Bottom margin that lifts the target line clear of the original line below."""
+        original_line = round(self.original_font_size * LINE_SPACING)
+        gap = round(self.original_font_size * BAND_GAP_SCALE)
+        return self.margin_vertical + original_line + gap
 
     @property
     def margin_horizontal(self) -> int:
@@ -139,16 +172,22 @@ def _ass_time(centiseconds: int) -> str:
     return f"{hours}:{minutes:02d}:{whole:02d}.{fraction:02d}"
 
 
-def render_ass(cues: Sequence[Cue], language: str, layout: SubtitleLayout) -> str:
-    """ASS document in source pixels; cue times keep the subtitle version's timing."""
+def _style_line(
+    name: str,
+    language: str,
+    layout: SubtitleLayout,
+    font_size: int,
+    outline: int,
+    margin_vertical: int,
+) -> str:
     colour = "&H00FFFFFF"
     black = "&H00000000"
-    style = ",".join(
+    return "Style: " + ",".join(
         str(value)
         for value in (
-            "Default",
+            name,
             subtitle_font(language),
-            layout.font_size,
+            font_size,
             colour,
             colour,
             black,
@@ -162,15 +201,89 @@ def render_ass(cues: Sequence[Cue], language: str, layout: SubtitleLayout) -> st
             0,
             0,
             1,  # outline plus drop shadow border style
-            layout.outline,
+            outline,
             0,
             2,  # bottom centre
             layout.margin_horizontal,
             layout.margin_horizontal,
-            layout.margin_vertical,
+            margin_vertical,
             1,
         )
     )
+
+
+def _dialogue(cue: Cue, style: str, layout: SubtitleLayout) -> str | None:
+    wrapped = [
+        _ass_text(part)
+        for source_line in cue.text.splitlines()
+        for part in wrap_line(source_line, layout.line_width)
+    ]
+    if not wrapped:
+        return None
+    # ASS keeps centiseconds; rounding must never collapse a cue to zero length.
+    start = max(0, round(cue.start * 100))
+    end = max(start + 1, round(cue.end * 100))
+    text = "\\N".join(wrapped)
+    return f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},{style},,0,0,0,,{text}"
+
+
+def render_ass(
+    cues: Sequence[Cue],
+    language: str,
+    layout: SubtitleLayout,
+    original: tuple[Sequence[Cue], str] | None = None,
+) -> str:
+    """ASS document in source pixels; cue times keep each subtitle version's timing.
+
+    With ``original`` the target language is burned on top and the original below it
+    in a smaller font; both versions keep their own cues and their own timing.
+    """
+    styles = [
+        _style_line(
+            DEFAULT_STYLE,
+            language,
+            layout,
+            layout.font_size,
+            layout.outline,
+            layout.margin_vertical,
+        ),
+    ]
+    events: list[str] = []
+    if original is None:
+        for cue in cues:
+            line = _dialogue(cue, DEFAULT_STYLE, layout)
+            if line:
+                events.append(line)
+    else:
+        original_cues, original_language = original
+        target_margin = layout.target_margin_vertical
+        styles = [
+            _style_line(
+                TARGET_STYLE,
+                language,
+                layout,
+                layout.font_size,
+                layout.outline,
+                target_margin,
+            ),
+            _style_line(
+                ORIGINAL_STYLE,
+                original_language,
+                layout,
+                layout.original_font_size,
+                layout.original_outline,
+                layout.margin_vertical,
+            ),
+        ]
+        # Each version follows its own timing: cues are never merged or re-timed.
+        for cue in cues:
+            line = _dialogue(cue, TARGET_STYLE, layout)
+            if line:
+                events.append(line)
+        for cue in original_cues:
+            line = _dialogue(cue, ORIGINAL_STYLE, layout)
+            if line:
+                events.append(line)
     lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -184,24 +297,12 @@ def render_ass(cues: Sequence[Cue], language: str, layout: SubtitleLayout) -> st
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: {style}",
+        *styles,
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        *events,
     ]
-    for cue in cues:
-        wrapped = [
-            _ass_text(part)
-            for source_line in cue.text.splitlines()
-            for part in wrap_line(source_line, layout.line_width)
-        ]
-        if not wrapped:
-            continue
-        # ASS keeps centiseconds; rounding must never collapse a cue to zero length.
-        start = max(0, round(cue.start * 100))
-        end = max(start + 1, round(cue.end * 100))
-        text = "\\N".join(wrapped)
-        lines.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,0,0,0,,{text}")
     return "\n".join(lines) + "\n"
 
 
