@@ -6,8 +6,14 @@ bottom centre, size scaled to the video height and a CJK-capable macOS system fo
 Bilingual burning keeps the target language on top and the original below it in a
 smaller font, each version following its own cue times in its own style. Each version
 wraps at its own font size, and the target's bottom margin reserves the original's whole
-rendered block — the tallest original cue, in lines — so a wrapped original can never
-push itself above the target nor move once the target cue ends.
+rendered block — the tallest original cue, in lines, capped at :data:`MARGIN_CLAMP_SCALE`
+so a single enormous cue cannot push the target off the frame.
+
+Two independent mechanisms keep the target above the original. The reserved block keeps
+the two bands from overlapping in the common case, and the target is emitted on a higher
+ASS layer than the original: libass resolves collisions within a layer, so a reserved
+block that turns out too small — line metrics vary per script, see :data:`LINE_SPACING` —
+does not lift the original above the target, it only lets the two overlap.
 """
 
 import unicodedata
@@ -23,22 +29,40 @@ MARGIN_SCALE = 0.05
 ORIGINAL_FONT_SCALE = 0.035
 # Gap between the two bilingual bands, as a share of the original line's font size.
 BAND_GAP_SCALE = 0.5
-# Upper bound on libass's line advance and on the glyph height in one line, as shares
-# of the font size: measured 1.0 em pitch and at most 0.92 em of glyphs for the macOS
-# system fonts behind every subtitle language, so reserving `lines * LINE_SPACING`
-# always covers a block of `lines` rendered lines.
+# Assumed libass line advance, as a share of the font size, when reserving the original's
+# block below the target. Per-glyph fallback breaks the plain 1.0 em assumption: measuring
+# block tops for 42 scripts on this machine's five fonts at the original style gave pitches
+# up to 1.358 em (Tamil) and 1.263 em (Kannada), and single-line ink extents up to 1.474 em
+# (Khmer, outline included). The requirement is
+# `(lines - 1) * pitch + extent <= lines * LINE_SPACING + gap` where `gap` is the band
+# gap, so 1.2 reserves enough for the sampled scripts but is NOT a general upper bound:
+# it goes negative for the worst pitch from three lines up. Overlap is therefore possible
+# for scripts whose metrics exceed this reservation, and the ordering of the two bands is
+# guaranteed by the ASS layers instead (see `render_ass`), not by this constant.
 LINE_SPACING = 1.2
+# Ceiling for the reserved bilingual band, as a share of the frame height. A single
+# oversized original cue otherwise reserves more than the frame has: at that point the
+# target would be pushed off the top of the picture and silently disappear, which is a
+# worse failure than an original block that overflows upward. Past this cap the target
+# sits exactly at the cap, still fully on screen, and the original keeps its own bottom
+# margin, its block clipped at the top edge.
+MARGIN_CLAMP_SCALE = 0.5
 DEFAULT_STYLE = "Default"
 TARGET_STYLE = "BilingualTarget"
 ORIGINAL_STYLE = "BilingualOriginal"
+# ASS layer of the bilingual target. libass resolves collisions within a layer only, so
+# the higher layer is what keeps the target from being pushed up by the original (and
+# the original from jumping once the target cue ends) whatever the line metrics are.
+TARGET_LAYER = 1
 # Conservative advance estimates in em; libass smart wrapping stays as a backstop for
 # space-separated text, but it never breaks CJK runs, so lines are wrapped here.
 WIDE_ADVANCE = 1.0
 NARROW_ADVANCE = 0.5
 # The original is wrapped counting every glyph as this wide. Its rendered line count
-# sets the target's bottom margin, so the estimate must exceed any real advance
-# (measured worst case ~1.0 em for fullwidth glyphs) or libass could break one of the
-# emitted lines again and need more lines than were reserved.
+# sets the target's bottom margin, so the estimate is intentionally pessimistic: a
+# fullwidth glyph advances about 1.0 em and the margin covers slightly wider ones. When
+# libass still breaks an emitted line the reservation falls short, which no longer moves
+# the bands apart from each other: the target keeps its layer above the original.
 ORIGINAL_ADVANCE = 1.05
 # Closing punctuation never starts a line (simple kinsoku rule).
 _NO_LINE_START = set("，。、！？；：）」』】》〉,.!?;:)]}%”’…")
@@ -106,16 +130,23 @@ class SubtitleLayout:
     def margin_vertical(self) -> int:
         return round(self.height * MARGIN_SCALE)
 
+    @property
+    def margin_limit(self) -> int:
+        """Hard ceiling for the target's bottom margin, so the target stays on screen."""
+        return round(self.height * MARGIN_CLAMP_SCALE)
+
     def bilingual_margin_vertical(self, original_lines: int) -> int:
         """Bottom margin that lifts the target line clear of the original's rendered block.
 
         ``original_lines`` is the tallest original cue, in rendered lines: the whole
         block is reserved below the target, otherwise a wrapped original collides with
-        the target and libass lifts the original above it.
+        the target and libass lifts the original above it. A block taller than the frame
+        cannot be reserved, so the margin stops at :attr:`margin_limit`; the original is
+        then clipped at the top edge instead of the target leaving the frame.
         """
         block = max(1, original_lines) * round(self.original_font_size * LINE_SPACING)
         gap = round(self.original_font_size * BAND_GAP_SCALE)
-        return self.margin_vertical + block + gap
+        return min(self.margin_vertical + block + gap, self.margin_limit)
 
     @property
     def margin_horizontal(self) -> int:
@@ -244,7 +275,9 @@ def _wrapped_lines(cue: Cue, width: float, narrow_advance: float) -> list[str]:
     ]
 
 
-def _dialogue(cue: Cue, style: str, width: float, narrow_advance: float) -> str | None:
+def _dialogue(
+    cue: Cue, style: str, width: float, narrow_advance: float, layer: int = 0
+) -> str | None:
     wrapped = _wrapped_lines(cue, width, narrow_advance)
     if not wrapped:
         return None
@@ -252,7 +285,7 @@ def _dialogue(cue: Cue, style: str, width: float, narrow_advance: float) -> str 
     start = max(0, round(cue.start * 100))
     end = max(start + 1, round(cue.end * 100))
     text = "\\N".join(wrapped)
-    return f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},{style},,0,0,0,,{text}"
+    return f"Dialogue: {layer},{_ass_time(start)},{_ass_time(end)},{style},,0,0,0,,{text}"
 
 
 def render_ass(
@@ -264,7 +297,10 @@ def render_ass(
     """ASS document in source pixels; cue times keep each subtitle version's timing.
 
     With ``original`` the target language is burned on top and the original below it
-    in a smaller font; both versions keep their own cues and their own timing.
+    in a smaller font; both versions keep their own cues and their own timing. The two
+    versions are also put on different ASS layers, which is what pins the target above
+    the original: libass only lifts events out of each other's way within one layer, so
+    an original taller than the reserved block overlaps the target without displacing it.
     """
     styles = [
         _style_line(
@@ -310,7 +346,7 @@ def render_ass(
         ]
         # Each version follows its own timing: cues are never merged or re-timed.
         for cue in cues:
-            line = _dialogue(cue, TARGET_STYLE, layout.line_width, NARROW_ADVANCE)
+            line = _dialogue(cue, TARGET_STYLE, layout.line_width, NARROW_ADVANCE, TARGET_LAYER)
             if line:
                 events.append(line)
         for cue in original_cues:

@@ -17,8 +17,11 @@ from tests.test_workspace_s2_api import FakeAdapter
 from video_content_capture.workspace import exports
 from video_content_capture.workspace.app import create_app
 from video_content_capture.workspace.burned import (
+    BAND_GAP_SCALE,
     LINE_SPACING,
     ORIGINAL_ADVANCE,
+    ORIGINAL_STYLE,
+    TARGET_STYLE,
     SubtitleLayout,
     render_ass,
     wrap_line,
@@ -365,7 +368,7 @@ def test_bilingual_burned_export_stacks_target_above_smaller_original(tmp_path: 
     # Each version keeps its own cue times: nothing is merged or re-timed.
     dialogues = [line for line in ass.splitlines() if line.startswith("Dialogue: ")]
     assert dialogues == [
-        "Dialogue: 0,0:00:00.00,0:00:00.50,BilingualTarget,,0,0,0,,original",
+        "Dialogue: 1,0:00:00.00,0:00:00.50,BilingualTarget,,0,0,0,,original",
         "Dialogue: 0,0:00:00.20,0:00:00.70,BilingualOriginal,,0,0,0,,the original line",
     ]
 
@@ -441,7 +444,7 @@ def test_bilingual_target_margin_reserves_wrapped_original_block() -> None:
         # The original wraps at its own font size, so it keeps more text per line.
         assert layout.original_line_width > layout.line_width
         counts: set[int] = set()
-        margins: dict[str, int] = {}
+        margins: dict[int, int] = {}
         for text in texts:
             for lines in (1, 2, 3):
                 cues = (Cue(id="two", start=1.0, end=2.0, text="\n".join([text] * lines)),)
@@ -457,23 +460,92 @@ def test_bilingual_target_margin_reserves_wrapped_original_block() -> None:
                     int(styles["BilingualTarget"][21]),
                     int(styles["BilingualOriginal"][21]),
                 )
-                # The reservation must cover every rendered line at the pitch libass
-                # actually uses (measured 1.0 em), so the target stays above the block.
-                assert rendered * layout.original_font_size <= target - bottom
+                block = rendered * round(layout.original_font_size * LINE_SPACING)
+                gap = round(layout.original_font_size * BAND_GAP_SCALE)
+                if layout.margin_vertical + block + gap <= layout.margin_limit:
+                    # The reservation covers every rendered line at the pitch libass
+                    # actually uses (measured 1.0 em), so the target stays above the block.
+                    assert rendered * layout.original_font_size <= target - bottom
+                else:
+                    # A block taller than the cap cannot be reserved; the margin stops
+                    # there so the target stays on screen (see the clamp test below).
+                    assert target == layout.margin_limit
+                    assert layout.margin_vertical + block + gap > target
                 assert LINE_SPACING >= 1.0
                 # The hard-coded single-line band #5 first shipped would not have covered it.
-                if rendered > 1:
+                if rendered > 1 and target < layout.margin_limit:
                     assert target > bottom + round(layout.original_font_size * LINE_SPACING)
                 # The original keeps its own style: smaller font, its own bottom margin.
                 assert styles["BilingualOriginal"][2] == str(layout.original_font_size)
                 assert bottom == layout.margin_vertical
-                margins[f"{rendered}"] = target
+                margins[rendered] = target
                 # Wrapping never lets subtitle text inject an ASS override tag.
                 assert "\\pos" not in ass and "{" not in ass.replace("\\{", "")
         # The band covers single-line and multi-line originals alike.
         assert {1, 2} <= counts and max(counts) >= 3
-        # The reserved band grows with the original's line count.
-        assert int(margins["1"]) < int(margins["2"]) < int(margins["3"])
+        # The reserved band grows with the original's rendered line count, up to the cap.
+        ordered = sorted(margins)
+        assert margins[ordered[0]] < margins[ordered[-1]]
+        assert margins[1] < margins[2]
+        assert all(
+            margins[smaller] <= margins[larger]
+            for smaller, larger in zip(ordered, ordered[1:], strict=False)
+        )
+
+
+def test_bilingual_margin_clamp_keeps_target_on_screen() -> None:
+    """One enormous original cue must not reserve the target off the top of the frame."""
+    for width, height in ((640, 360), (1280, 720), (1920, 1080), (1080, 1920)):
+        layout = SubtitleLayout(width, height)
+        limit = layout.margin_limit
+        # The cap leaves the target the upper half of the frame, always inside it.
+        assert limit < height
+        assert limit == round(height * 0.5)
+        # Normal originals are nowhere near it, so they keep the exact reservation.
+        for lines in (1, 2, 4):
+            assert layout.bilingual_margin_vertical(lines) < limit
+            assert layout.bilingual_margin_vertical(lines) == (
+                layout.margin_vertical
+                + lines * round(layout.original_font_size * LINE_SPACING)
+                + round(layout.original_font_size * BAND_GAP_SCALE)
+            )
+        # Past the cap the margin stops growing, however tall the original gets.
+        assert layout.bilingual_margin_vertical(500) == limit
+        big = layout.bilingual_margin_vertical(500)
+        huge = layout.bilingual_margin_vertical(5_000)
+        assert big == huge == limit
+        # A single cue of 1200 CJK characters really does reach the cap.
+        text = "字" * 1200
+        cue = Cue(id="big", start=1.0, end=2.0, text=text)
+        ass = render_ass([cue], "zh-TW", layout, original=([cue], "en"))
+        styles = _ass_styles(ass)
+        assert int(styles["BilingualTarget"][21]) == limit
+        # The target's own line still fits below the cap with room for its own height.
+        assert limit + layout.font_size < height
+        assert styles["BilingualOriginal"][21] == str(layout.margin_vertical)
+        # The clamp is a style-level margin: no injected positioning reaches the text.
+        assert "\\pos" not in ass and "{" not in ass.replace("\\{", "")
+
+
+def test_bilingual_target_uses_its_own_ass_layer() -> None:
+    """The target's layer, not the reservation, is what pins it above the original."""
+    layout = SubtitleLayout(640, 360)
+    cues = (Cue(id="one", start=1.0, end=2.0, text="繁體中文字幕"),)
+    original = (Cue(id="two", start=1.0, end=2.0, text=WRAPPED_ORIGINAL),)
+    ass = render_ass(cues, "zh-TW", layout, original=(original, "en"))
+    dialogues = [line for line in ass.splitlines() if line.startswith("Dialogue: ")]
+    assert len(dialogues) == 2
+    # libass only lifts events within one layer, so the original cannot displace the
+    # target whatever the original's real line metrics turn out to be.
+    assert dialogues[0].startswith("Dialogue: 1,") and TARGET_STYLE in dialogues[0]
+    assert dialogues[1].startswith("Dialogue: 0,") and ORIGINAL_STYLE in dialogues[1]
+    # The single-language path keeps every event on the default layer.
+    single = render_ass(cues, "zh-TW", layout)
+    assert all(
+        line.startswith("Dialogue: 0,")
+        for line in single.splitlines()
+        if line.startswith("Dialogue: ")
+    )
 
 
 def test_long_lines_wrap_within_frame_and_text_cannot_inject_tags() -> None:
@@ -773,6 +845,80 @@ def test_bilingual_burn_real_ffmpeg_keeps_wrapped_original_below_target(
     assert len(after) == 1, after
     assert after[0] == below
     assert _bands_at(both_source, both_burn, 0.5, width, height) == []
+
+
+@pytest.mark.skipif(not _vt_available(), reason="ffmpeg with VideoToolbox H.264 is unavailable")
+def test_bilingual_burn_real_ffmpeg_keeps_target_visible_past_the_margin_cap(
+    tmp_path: Path,
+) -> None:
+    """An original too tall to reserve must not push the target out of the picture."""
+    width, height = 1920, 1080
+    layout = SubtitleLayout(width, height)
+    target = ExportTrack(
+        version_id="target",
+        language="zh-TW",
+        name="target",
+        srt="",
+        cues=(Cue(id="one", start=1.5, end=2.9, text="繁體中文字幕"),),
+    )
+    original = ExportTrack(
+        version_id="original",
+        language="zh-CN",
+        name="original",
+        srt="",
+        cues=(
+            # Far more text than the frame can hold: it alone would reserve the target
+            # right off the top of the picture. Then a short cue in its own place.
+            Cue(id="two", start=1.0, end=2.4, text="字" * 1200),
+            Cue(id="three", start=2.5, end=2.9, text="原文短句"),
+        ),
+    )
+    alone_source, alone_burn = _burn_real(
+        tmp_path, "cap-alone", target=target, original=None, width=width, height=height
+    )
+    both_source, both_burn = _burn_real(
+        tmp_path, "cap-both", target=target, original=original, width=width, height=height
+    )
+
+    alone_band = _bands_at(alone_source, alone_burn, 1.6, width, height)[0]
+    alone = _mask(_gray_frame(alone_source, 1.6), _gray_frame(alone_burn, 1.6))
+    alone_span = _ink_columns(alone, width, alone_band)
+
+    # Past 2.5 s the oversized original is gone but its reservation is not: the target
+    # and the short original line both render, so they can be told apart.
+    bands = _bands_at(both_source, both_burn, 2.7, width, height)
+    assert len(bands) == 2, bands
+    top, bottom = bands
+    assert top.stop <= bottom.start, bands
+    frame = _mask(_gray_frame(both_source, 2.7), _gray_frame(both_burn, 2.7))
+    top_span = _ink_columns(frame, width, top)
+    # The target's glyph run is on screen, unclipped and unshifted, at the capped margin.
+    assert abs(top_span.start - alone_span.start) <= 4
+    assert abs(top_span.stop - alone_span.stop) <= 4
+    assert abs(len(top) - len(alone_band)) <= 4
+    assert top.start > 0 and top.stop <= height
+    assert abs((height - top.stop) - layout.margin_limit) <= 6, (top, layout.margin_limit)
+    # The short original keeps its own, much lower place below the capped target.
+    assert abs((height - bottom.stop) - layout.margin_vertical) <= 6, bottom
+    # The reservation that original asked for is off the frame: the cap is what keeps
+    # the target visible instead of letting it be pushed out of the picture.
+    rendered = len(wrap_line("字" * 1200, layout.original_line_width, ORIGINAL_ADVANCE))
+    assert rendered > 20
+    assert layout.bilingual_margin_vertical(rendered) == layout.margin_limit
+    assert (
+        layout.margin_vertical
+        + rendered * round(layout.original_font_size * LINE_SPACING)
+        + round(layout.original_font_size * BAND_GAP_SCALE)
+        > height
+    )
+    # Outside every cue window the burned picture stays identical to the source.
+    assert _bands_at(both_source, both_burn, 0.5, width, height) == []
+    # While the oversized original is live it keeps its own bottom margin: with the two
+    # versions on separate ASS layers it overflows the top edge instead of being packed
+    # above the target (which is what would move it when a target cue ends).
+    live = _mask(_gray_frame(both_source, 1.6), _gray_frame(both_burn, 1.6))
+    near_bottom = range(height - layout.margin_vertical - 2, height)
+    assert any(live[y * width : (y + 1) * width] for y in near_bottom)
 
 
 def test_reexport_panel_offers_burned_subtitle_form() -> None:
