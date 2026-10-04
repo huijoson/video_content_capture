@@ -24,8 +24,9 @@ def test_import_selection_and_job_controls_have_accessible_elements() -> None:
     for element_id in (
         "load-video",
         "refresh-source",
-        "format",
-        "audio",
+        "resolution",
+        "resolved-source",
+        "audio-summary",
         "start-job",
         "media-asset",
         "player",
@@ -37,6 +38,20 @@ def test_import_selection_and_job_controls_have_accessible_elements() -> None:
     assert page.by_id["job-progress"]["tag"] == "progress"
     for element_id in ("subtitle-language", "include-original", "question"):
         assert "disabled" in page.by_id[element_id]
+    # Quality is chosen by resolution only; the audio track is shown read-only.
+    assert page.by_id["resolution"]["tag"] == "select"
+    assert page.by_id["audio-summary"]["tag"] == "p"
+    assert "format" not in page.by_id and "audio" not in page.by_id
+
+
+def test_quality_menus_list_only_resolutions() -> None:
+    script = (STATIC / "workspace.js").read_text()
+    assert "metadata.resolutions" in script
+    assert "default_resolution" in script
+    assert "metadata.formats" not in script and "metadata.audio_tracks" not in script
+    assert "format_id: element(" not in script
+    # Re-export picks a saved asset labelled by its resolution only.
+    assert "`格式 ${asset.format_id}" not in script
 
 
 def test_browser_script_uses_controlled_ids_and_safe_text() -> None:

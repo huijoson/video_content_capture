@@ -28,7 +28,7 @@
         <button id="load-video" class="primary" type="submit">載入影片</button>
         <button id="cancel-query" type="button" hidden>取消查詢</button>
       </div>
-      <p id="import-help" class="hint">每次載入一支影片，查詢後選擇實際畫質與音軌；按開始處理才下載。</p>
+      <p id="import-help" class="hint">每次載入一支影片，查詢後只需選擇解析度；按開始處理才下載。</p>
     </form>
   </header>
   <main id="workspace" class="workspace" tabindex="-1" data-narrow-tab="subtitles">
@@ -44,7 +44,7 @@
         <p>影片庫目前是空的。</p>
         <ol>
           <li>在上方貼上一支 YouTube 影片網址，按「載入影片」。</li>
-          <li>確認畫質與音軌後按「開始處理」。</li>
+          <li>選擇解析度後按「開始處理」。</li>
           <li>取得或匯入字幕後即可播放、翻譯、匯出與提問。</li>
         </ol>
       </div>
@@ -64,7 +64,7 @@
           <p id="video-source" class="hint"></p>
         </div>
         <div class="field">
-          <label for="media-asset">已保存的影音資產</label>
+          <label for="media-asset">已保存的解析度（播放與重新匯出）</label>
           <select id="media-asset" disabled></select>
         </div>
         <video id="player" controls preload="metadata" hidden aria-label="影片播放器"></video>
@@ -85,11 +85,11 @@
         <button id="refresh-source" type="button">重新查詢來源格式</button>
         <form id="processing-form" class="card">
           <h3>下載影音</h3>
-          <label for="format">來源畫質</label>
-          <select id="format" aria-describedby="quality-help" required></select>
+          <label for="resolution">解析度</label>
+          <select id="resolution" aria-describedby="quality-help resolved-source" required></select>
           <p id="quality-help" class="hint"></p>
-          <label for="audio">音軌</label>
-          <select id="audio" aria-describedby="audio-help" required></select>
+          <p id="resolved-source" class="hint" role="status" aria-live="polite"></p>
+          <p id="audio-summary"></p>
           <p id="audio-help" class="hint"></p>
           <p class="hint">預計步驟：下載影音 → 取得字幕／匯入 → 翻譯（需確認）→ 匯出（需確認）</p>
           <button id="start-job" class="primary" type="submit">開始處理</button>

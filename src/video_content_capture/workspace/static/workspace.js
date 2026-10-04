@@ -17,8 +17,8 @@ const errorLabels = {
   preview_not_needed: "此影音可直接播放，不需要相容預覽。",
   cancelled: "工作已取消；已保留完成階段，可手動重試。",
   insufficient_space: "磁碟空間不足，請手動清理空間後重試；已完成資產會保留。",
-  format_missing: "所選來源格式已消失，請重新查詢來源並選擇畫質與音軌。",
-  format_unavailable: "所選來源格式無法取得，請重新查詢來源並選擇畫質與音軌。",
+  format_missing: "所選來源格式已消失，請重新查詢來源並重新選擇解析度。",
+  format_unavailable: "所選來源格式無法取得，請重新查詢來源並重新選擇解析度。",
   media_failed: "影音下載、合併或驗證失敗，請檢查來源與本機媒體工具後重試。",
   source_unavailable: "來源不支援／無法取得，請確認影片非直播且無須登入，再重試。",
   container_confirmation_required: "MP4 封裝失敗；來源與字幕已保留。請在匯出區改選 MKV，重新確認摘要並建立匯出工作。",
@@ -58,6 +58,9 @@ let playbackVideoId = null;
 let geminiConfigured = false;
 let exportSnapshot = null;
 let exportGeneration = 0;
+// Subtitle form used to resolve the source version for a download; matches today's export.
+const downloadSubtitleForm = "tracks";
+const codecLabels = { h264: "H.264", aac: "AAC", vp9: "VP9", av1: "AV1", opus: "Opus" };
 let currentConversation = null;
 let qaGeneration = 0;
 let qaSubmitting = false;
@@ -200,35 +203,53 @@ function options(select, entries, selected, label) {
 
 function renderVideo(video, preserveSelection = false) {
   const sameVideo = currentVideo?.id === video.id;
-  const selectedFormat = preserveSelection && sameVideo ? element("format").value : null;
-  const selectedAudio = preserveSelection && sameVideo ? element("audio").value : null;
+  const selectedHeight = preserveSelection && sameVideo ? Number(element("resolution").value) : null;
   currentVideo = video;
   if (!sameVideo) { element("include-original").checked = false; element("export-container").value = ""; element("subtitle-language").value = "zh-TW"; }
   element("video-details").hidden = false;
   element("video-title").textContent = video.title;
   element("video-source").textContent = `時長：${video.duration == null ? "未知" : `${Math.round(video.duration)} 秒`} · YouTube`;
   const metadata = video.metadata || {};
-  options(element("format"), metadata.formats || [], selectedFormat || metadata.default_format_id,
-    (format) => `${format.height}p · ${format.fps || "未知"} FPS · ${format.codec} · ${
-      format.size == null ? "大小未知" : `約 ${(format.size / 1048576).toFixed(1)} MB`
-    }（格式 ${format.id}）`);
-  options(element("audio"), metadata.audio_tracks || [], selectedAudio || metadata.default_audio_id,
-    (audio) => `${audio.language || "未知"} · ${audio.codec} · ${audio.original ? "原音" : "原音未知／其他音軌"}${audio.default ? " · 預設軌" : ""}`);
+  const resolutions = (metadata.resolutions || []).map((entry) => ({ ...entry, id: String(entry.height) }));
+  const keptHeight = resolutions.some((entry) => entry.height === selectedHeight) ? selectedHeight : metadata.default_resolution;
+  options(element("resolution"), resolutions, String(keptHeight), (entry) => `${entry.height}p`);
   element("quality-help").textContent = metadata.above_1080p
-    ? "來源全部高於 1080p，預選最低畫質。大小為估算，實際磁碟需求可能不同。"
-    : "預選不高於 1080p 的最高畫質。大小為估算，實際磁碟需求可能不同。";
-  element("audio-help").textContent = "原音無法判定時標示未知；開始後固定所選格式與音軌，來源消失須重新選擇。";
-  const assets = video.assets || [];
-  const preferredAsset = assets.find((asset) => asset.format_id === element("format").value &&
-    asset.audio_id === element("audio").value) || assets.find((asset) => asset.id === activeAsset) || assets[0];
+    ? "來源全部高於 1080p，已預選其中最低的解析度。"
+    : "預選不高於 1080p 的最高解析度；只列來源實際有的解析度，不放大。";
+  const audio = metadata.audio;
+  element("audio-summary").textContent = audio
+    ? `音軌（自動選擇）：${audio.language || "未知"} · ${codecLabels[audio.codec] || audio.codec} · ${audio.original ? "原音" : "原音未知"}${audio.default ? " · 預設軌" : ""}`
+    : "音軌（自動選擇）：未知";
+  element("audio-help").textContent = "自動選原語言的預設軌，不使用配音軌；開始後固定來源版本，來源消失須重新查詢。";
+  renderResolvedSource();
+  // One saved asset per resolution; prefer the directly playable one.
+  const assetsByHeight = new Map();
+  for (const asset of video.assets || []) {
+    const key = asset.height ?? `asset:${asset.id}`;
+    const kept = assetsByHeight.get(key);
+    if (!kept || (asset.browser_playable && !kept.browser_playable)) assetsByHeight.set(key, asset);
+  }
+  const assets = [...assetsByHeight.values()].sort((a, b) => (b.height || 0) - (a.height || 0));
+  const previous = sameVideo ? element("media-asset").value : null;
+  const preferredAsset = assets.find((asset) => asset.id === previous) ||
+    assets.find((asset) => asset.height === Number(element("resolution").value)) || assets[0];
   options(element("media-asset"), assets, preferredAsset?.id,
-    (asset) => `格式 ${asset.format_id} · 音軌 ${asset.audio_id} · ${asset.browser_playable ? "可播放" : "需要相容預覽"}`);
+    (asset) => `${asset.height ? `${asset.height}p` : "解析度未知"}${asset.browser_playable ? "" : "（需相容預覽）"}`);
   element("media-asset").disabled = !assets.length;
   renderPlayback(video);
   renderLibrary();
   renderSubtitles(video, preserveSelection && sameVideo);
   updateStartButton();
   loadConversations(video.id).catch(showQaError);
+}
+
+function renderResolvedSource() {
+  const metadata = currentVideo?.metadata || {};
+  const entry = (metadata.resolutions || []).find((item) => String(item.height) === element("resolution").value);
+  const resolved = entry?.[downloadSubtitleForm];
+  element("resolved-source").textContent = resolved
+    ? `可切換字幕軌成品：${resolved.output_container.toUpperCase()}（${resolved.height}p · ${resolved.fps || "未知"} FPS · ${codecLabels[resolved.video_codec] || resolved.video_codec}＋${codecLabels[resolved.audio_codec] || resolved.audio_codec}）。系統自動選擇來源版本。`
+    : "";
 }
 
 function stopPlayer(message) {
@@ -260,7 +281,7 @@ function renderPlayback(video) {
   if (!source.url) {
     stopPlayer(source.asset
       ? "此影音無法由瀏覽器直接播放；可製作相容預覽。字幕、問答與成品下載仍可使用。"
-      : "影音尚未就緒，請選擇畫質與音軌並開始處理。");
+      : "影音尚未就緒，請選擇解析度並開始處理。");
     return;
   }
   player.hidden = false;
@@ -328,8 +349,8 @@ async function openVideo(id) {
 }
 
 function updateStartButton() {
-  element("start-job").disabled = !currentVideo || !element("format").value ||
-    !element("audio").value || jobs.some((job) => job.video_id === currentVideo.id && activeStatuses.has(job.status));
+  element("start-job").disabled = !currentVideo || !element("resolution").value ||
+    jobs.some((job) => job.video_id === currentVideo.id && activeStatuses.has(job.status));
 }
 
 function renderJobs() {
@@ -400,6 +421,7 @@ async function savePosition(force = false) {
   } finally { savingPosition = false; }
 }
 
+element("resolution").addEventListener("change", renderResolvedSource);
 element("media-asset").addEventListener("change", async () => {
   if (!currentVideo) return;
   const video = currentVideo;
@@ -428,7 +450,7 @@ element("import-form").addEventListener("submit", async (event) => {
     if (generation !== opening) return;
     await savePosition(true);
     renderVideo(video);
-    element("import-status").textContent = "影片已載入，請確認畫質與音軌後開始處理。";
+    element("import-status").textContent = "影片已載入，請確認解析度後開始處理。";
     await loadVideos();
     await pollJobs();
   } catch (error) {
@@ -485,7 +507,7 @@ element("refresh-source").addEventListener("click", async () => {
     const video = await request("/api/query", "POST", { url, refresh: true });
     if (currentVideo?.id !== id) return;
     renderVideo(video);
-    element("import-status").textContent = "已更新來源，請重新選擇畫質與音軌後開始處理。";
+    element("import-status").textContent = "已更新來源，請重新選擇解析度後開始處理。";
   } catch (error) { showError(error); }
   finally { button.disabled = false; }
 });
@@ -495,7 +517,7 @@ element("processing-form").addEventListener("submit", async (event) => {
   element("start-job").disabled = true;
   try {
     await request(`/api/videos/${controlled(currentVideo.id)}/jobs`, "POST", {
-      format_id: element("format").value, audio_id: element("audio").value,
+      height: Number(element("resolution").value), subtitle_form: downloadSubtitleForm,
     });
     await pollJobs();
   } catch (error) { showError(error); updateStartButton(); }

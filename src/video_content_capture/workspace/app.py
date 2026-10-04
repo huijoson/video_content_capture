@@ -18,6 +18,7 @@ from video_content_capture.workspace.jobs import JobLanes, MediaQueue
 from video_content_capture.workspace.previews import Encoder, PreviewService
 from video_content_capture.workspace.qa import QAAdapter
 from video_content_capture.workspace.qa_jobs import QAService
+from video_content_capture.workspace.quality import SubtitleForm, quality_options, resolve_source
 from video_content_capture.workspace.security import LocalBoundary, configure_redaction, public_text
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.subtitles import (
@@ -57,8 +58,13 @@ class QueryRequest(BaseModel):
 
 
 class JobRequest(BaseModel):
-    format_id: str = Field(max_length=100)
-    audio_id: str = Field(max_length=100)
+    # The user picks only a resolution; the source format and audio track are resolved.
+    height: int | None = Field(default=None, gt=0, le=100_000)
+    # Matches the existing export output (selectable tracks) until burned export exists.
+    subtitle_form: SubtitleForm = "tracks"
+    # Explicit format/audio IDs remain accepted for internal callers and older clients.
+    format_id: str | None = Field(default=None, max_length=100)
+    audio_id: str | None = Field(default=None, max_length=100)
 
 
 class PositionRequest(BaseModel):
@@ -196,12 +202,23 @@ def create_app(
             metadata["selected_format"] = source.default_format_id
             metadata["selected_audio"] = source.default_audio_id
             metadata["above_1080"] = source.above_1080p
+            metadata.update(quality_options(source))
             video["metadata"] = metadata
+            formats = {item.id: item for item in source.formats}
+        else:
+            formats = {}
         video["assets"] = [
             {
-                key: value
-                for key, value in asset.items()
-                if key not in ("path", "checksum", "fingerprint")
+                **{
+                    key: value
+                    for key, value in asset.items()
+                    if key not in ("path", "checksum", "fingerprint")
+                },
+                "height": (
+                    formats[str(asset["format_id"])].height
+                    if str(asset["format_id"]) in formats
+                    else None
+                ),
             }
             for asset in library.assets(video_id)
         ]
@@ -338,15 +355,25 @@ def create_app(
             source = SourceMetadata.model_validate_json(
                 str(library.get_video(video_id)["metadata"])
             )
-            if body.format_id not in {f.id for f in source.formats} or body.audio_id not in {
+            resolved = None
+            if body.height is not None:
+                resolved = resolve_source(source, body.height, body.subtitle_form)
+                format_id, audio_id = resolved.format_id, resolved.audio_id
+            elif body.format_id is not None and body.audio_id is not None:
+                format_id, audio_id = body.format_id, body.audio_id
+            else:
+                raise ValueError("Missing resolution")
+            if format_id not in {f.id for f in source.formats} or audio_id not in {
                 a.id for a in source.audio_tracks
             }:
                 raise ValueError("Invalid selection")
-            job = library.create_job(video_id, body.format_id, body.audio_id)
+            job = library.create_job(video_id, format_id, audio_id)
             queue.enqueue(job)
+            if resolved is not None:
+                job = {**job, "resolved": resolved.model_dump(mode="json")}
             return job
         except (ValueError, KeyError) as error:
-            raise HTTPException(400, "請選擇來源實際格式") from error
+            raise HTTPException(400, "請選擇來源實際有的解析度") from error
 
     @app.get("/api/videos/{video_id}/subtitles")
     def subtitles(video_id: str) -> list[Record]:
