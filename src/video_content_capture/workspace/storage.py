@@ -24,7 +24,7 @@ from uuid import uuid4
 from video_content_capture.redaction import scrub_text
 from video_content_capture.workspace.subtitles import Cue, validate_cues, validate_language
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 Record = dict[str, object]
 _VIDEO_ID = re.compile(r"[0-9a-f]{32}\Z")
 _VIDEO_SUBDIRECTORIES = ("source", "subtitles", "previews", "exports")
@@ -191,6 +191,14 @@ class Library:
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS media_previews_asset ON media_previews(asset_id)"
             )
+        if version < 6:
+            # Artifacts published before burned-in export all carry selectable tracks.
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(export_artifacts)")}
+            if "subtitle_form" not in columns:
+                connection.execute(
+                    "ALTER TABLE export_artifacts ADD COLUMN subtitle_form TEXT NOT NULL "
+                    "DEFAULT 'tracks'"
+                )
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @staticmethod

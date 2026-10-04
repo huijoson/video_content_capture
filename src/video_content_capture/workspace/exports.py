@@ -1,4 +1,4 @@
-"""Immutable subtitle export snapshots and verified stream-copy packaging."""
+"""Immutable subtitle export snapshots, verified stream-copy packaging and burned encodes."""
 
 import json
 import re
@@ -6,19 +6,31 @@ import shutil
 import sqlite3
 import unicodedata
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event
-from typing import Annotated, BinaryIO, Literal
+from threading import Event, Thread
+from typing import Annotated, BinaryIO, Literal, Self
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from video_content_capture.workspace.burned import (
+    AUDIO_BITRATE,
+    SubtitleLayout,
+    filter_value,
+    render_ass,
+    target_bitrate,
+)
 from video_content_capture.workspace.jobs import checksum
 from video_content_capture.workspace.storage import Library, Record
+from video_content_capture.workspace.subtitles import Cue
 from video_content_capture.workspace.youtube import SourceError, run_process
 
 ProcessRunner = Callable[[list[str], Event], str]
+ProgressCallback = Callable[[float | None], None]
+# Seconds between reads of ffmpeg's -progress file.
+PROGRESS_INTERVAL = 0.25
 
 
 class ExportTrack(BaseModel):
@@ -27,6 +39,7 @@ class ExportTrack(BaseModel):
     language: str
     name: str
     srt: str
+    cues: tuple[Cue, ...] = ()
 
     @property
     def language_tag(self) -> str:
@@ -137,9 +150,221 @@ def verified_source(library: Library, video_id: str, asset_id: str) -> tuple[Rec
     return asset, path
 
 
+@dataclass(frozen=True)
+class BurnPlan:
+    """Probed source properties that fix the burned output's resolution and audio."""
+
+    width: int
+    height: int
+    duration: float | None
+    audio_codec: str | None
+    audio_bitrate: int | None
+
+    @property
+    def video_bitrate(self) -> int:
+        return target_bitrate(self.height)
+
+    def estimated_bytes(self) -> int | None:
+        if self.duration is None:
+            return None
+        audio = 0
+        if self.audio_codec == "aac":
+            audio = self.audio_bitrate or 320_000
+        elif self.audio_codec is not None:
+            audio = AUDIO_BITRATE
+        return int((self.video_bitrate + audio) * self.duration / 8)
+
+
+def _hardware_unavailable() -> SourceError:
+    return SourceError(
+        "hardware_encoder_unavailable",
+        "VideoToolbox 硬體編碼不可用，無法燒錄字幕；不會改用軟體編碼或降低畫質",
+    )
+
+
 class MediaExporter:
     def __init__(self, runner: ProcessRunner = run_process) -> None:
         self.runner = runner
+
+    def require_hardware(self, cancel: Event) -> None:
+        """Encode a tiny clip with VideoToolbox; never fall back to software encoding."""
+        try:
+            self.runner(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=320x240:r=10:d=0.2",
+                    "-c:v",
+                    "h264_videotoolbox",
+                    "-allow_sw",
+                    "0",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                cancel,
+            )
+        except SourceError:
+            if cancel.is_set():
+                raise
+            raise _hardware_unavailable() from None
+
+    def _probe(self, path: Path, cancel: Event) -> tuple[list[dict[str, object]], Record]:
+        try:
+            info: object = json.loads(
+                self.runner(
+                    [
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-show_streams",
+                        "-show_format",
+                        "-of",
+                        "json",
+                        str(path),
+                    ],
+                    cancel,
+                )
+            )
+            if not isinstance(info, dict) or not isinstance(info.get("streams"), list):
+                raise ValueError
+            streams = info["streams"]
+            container = info.get("format", {})
+            if not all(isinstance(s, dict) for s in streams) or not isinstance(container, dict):
+                raise ValueError
+            return [dict(s) for s in streams], dict(container)
+        except (ValueError, TypeError):
+            raise SourceError("invalid_export", "媒體資訊讀取失敗") from None
+
+    def burn_plan(self, source: Path, cancel: Event) -> BurnPlan:
+        streams, container = self._probe(source, cancel)
+        video = next((s for s in streams if s.get("codec_type") == "video"), {})
+        audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        width, height = video.get("width"), video.get("height")
+        if (
+            type(width) is not int
+            or type(height) is not int
+            or width < 2
+            or height < 2
+            or width % 2
+            or height % 2
+        ):
+            # H.264 4:2:0 needs even dimensions; scaling would change the resolution.
+            raise SourceError("invalid_export", "來源影像尺寸無法燒錄")
+
+        def positive(value: object) -> float | None:
+            try:
+                number = float(str(value))
+            except ValueError:
+                return None
+            return number if 0 < number < float("inf") else None
+
+        bitrate = positive(audio.get("bit_rate")) if audio else None
+        return BurnPlan(
+            width=width,
+            height=height,
+            duration=positive(container.get("duration")),
+            audio_codec=str(audio.get("codec_name")) if audio else None,
+            audio_bitrate=int(bitrate) if bitrate else None,
+        )
+
+    def burn(
+        self,
+        source: Path,
+        track: ExportTrack,
+        directory: Path,
+        cancel: Event,
+        progress: ProgressCallback | None = None,
+        *,
+        preview: bool = False,
+    ) -> Path:
+        """Draw one subtitle version into the picture: H.264 (VideoToolbox) + AAC MP4."""
+        plan = self.burn_plan(source, cancel)
+        self.require_hardware(cancel)
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        subtitle = directory / "burned.ass"
+        layout = SubtitleLayout(plan.width, plan.height)
+        subtitle.write_text(render_ass(track.cues, track.language, layout), encoding="utf-8")
+        subtitle.chmod(0o600)
+        report = directory / "progress.txt"
+        output = directory / f"{uuid4().hex}.mp4"
+        arguments = ["ffmpeg", "-nostdin", "-v", "error", "-nostats"]
+        arguments += ["-progress", str(report), "-stats_period", str(PROGRESS_INTERVAL)]
+        arguments += ["-i", str(source), "-map", "0:v:0", "-map", "0:a:0?"]
+        # The subtitles filter draws in source pixels; nothing scales the picture.
+        arguments += ["-vf", f"subtitles=filename={filter_value(str(subtitle))}"]
+        arguments += ["-c:v", "h264_videotoolbox", "-allow_sw", "0", "-profile:v", "high"]
+        arguments += ["-b:v", str(plan.video_bitrate), "-pix_fmt", "yuv420p"]
+        if plan.audio_codec == "aac":
+            arguments += ["-c:a", "copy"]
+        elif plan.audio_codec is not None:
+            arguments += ["-c:a", "aac", "-b:a", str(AUDIO_BITRATE)]
+        arguments += ["-sn", "-dn", "-movflags", "+faststart"]
+        if preview:
+            arguments += ["-t", "0.1"]
+        arguments += ["-n", str(output)]
+        stop = Event()
+
+        def watch() -> None:
+            last: float | None = None
+            while not stop.wait(PROGRESS_INTERVAL):
+                fraction = self._processed(report, plan.duration)
+                if progress is not None and fraction is not None and fraction != last:
+                    last = fraction
+                    progress(fraction)
+
+        watcher = Thread(target=watch, name="workspace-burn-progress", daemon=True)
+        if progress is not None:
+            # Unknown total duration stays indeterminate instead of a fake percentage.
+            progress(0.0 if plan.duration else None)
+            watcher.start()
+        try:
+            self.runner(arguments, cancel)
+        except SourceError:
+            if cancel.is_set():
+                raise
+            raise SourceError("burn_failed", "燒錄字幕輸出失敗；來源與字幕已保留") from None
+        finally:
+            stop.set()
+            if watcher.is_alive():
+                watcher.join()
+        self.verify_burned(output, plan, cancel)
+        return output
+
+    @staticmethod
+    def _processed(report: Path, duration: float | None) -> float | None:
+        """Processed share of the duration from ffmpeg's latest out_time_us."""
+        if not duration:
+            return None
+        try:
+            text = report.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return None
+        values = re.findall(r"^out_time_us=(\d+)$", text, flags=re.MULTILINE)
+        if not values:
+            return None
+        return min(int(values[-1]) / 1_000_000 / duration, 1.0)
+
+    def verify_burned(self, output: Path, plan: BurnPlan, cancel: Event) -> None:
+        streams, container = self._probe(output, cancel)
+        video = [s for s in streams if s.get("codec_type") == "video"]
+        audio = [s.get("codec_name") for s in streams if s.get("codec_type") == "audio"]
+        if (
+            "mp4" not in str(container.get("format_name", "")).split(",")
+            or len(video) != 1
+            or video[0].get("codec_name") != "h264"
+            or (video[0].get("width"), video[0].get("height")) != (plan.width, plan.height)
+            or audio != (["aac"] if plan.audio_codec is not None else [])
+            or any(s.get("codec_type") == "subtitle" for s in streams)
+            or not output.is_file()
+            or output.stat().st_size == 0
+        ):
+            raise SourceError("invalid_export", "燒錄成品格式／解析度驗證失敗")
 
     def preview(
         self, source: Path, tracks: list[ExportTrack], directory: Path, cancel: Event
@@ -245,6 +470,7 @@ class MediaExporter:
 
 
 SnapshotId = Annotated[str, Field(min_length=1, max_length=32)]
+SubtitleForm = Literal["burned", "tracks"]
 
 
 class SnapshotTrack(BaseModel):
@@ -269,6 +495,16 @@ class ExportSnapshot(BaseModel):
     title: str = Field(max_length=4096)
     youtube_id: str = Field(pattern=r"^[A-Za-z0-9_-]{11}$")
     quality: str = Field(min_length=1, max_length=1000)
+    # Snapshots confirmed before burned-in export existed are selectable tracks.
+    subtitle_form: SubtitleForm = "tracks"
+
+    @model_validator(mode="after")
+    def _burned_shape(self) -> Self:
+        if self.subtitle_form == "burned" and (
+            self.container != "mp4" or self.include_original or len(self.tracks) != 1
+        ):
+            raise ValueError("Burned exports are single-language MP4")
+        return self
 
 
 class ExportService:
@@ -282,11 +518,13 @@ class ExportService:
         version = self.library.get_subtitle_version(version_id)
         if version["video_id"] != video_id or not version["complete"]:
             raise ValueError("請選擇本影片的完整字幕版本")
+        cues = self.library.subtitle_cues(version_id)
         return ExportTrack(
             version_id=version_id,
             language=str(version["language"]),
             name=str(version["name"]),
-            srt=render_subtitles(self.library.subtitle_cues(version_id), "srt").decode("utf-8"),
+            srt=render_subtitles(cues, "srt").decode("utf-8"),
+            cues=tuple(cues),
         )
 
     def _source(self, video_id: str, asset_id: str) -> tuple[Record, Path]:
@@ -313,9 +551,12 @@ class ExportService:
         original_version_id: str | None = None,
         source_version_id: str | None = None,
         container: str | None = None,
+        subtitle_form: SubtitleForm = "tracks",
     ) -> dict[str, object]:
         if len(target_version_ids) != 1:
             raise ValueError("請選擇一份目標字幕版本")
+        if subtitle_form == "burned" and (include_original or container not in {None, "mp4"}):
+            raise ValueError("燒錄字幕成品為單一語系 MP4")
         video = self.library.get_video(video_id)
         if video["deleting"]:
             raise ValueError("影片刪除中")
@@ -328,7 +569,11 @@ class ExportService:
         with TemporaryDirectory(
             prefix=".export-preview-", dir=self.library.video_dir(video_id)
         ) as temp:
-            if container is None:
+            if subtitle_form == "burned":
+                # A short trial encode proves VideoToolbox and the subtitle render up front.
+                self.exporter.burn(source, tracks[0], Path(temp), Event(), preview=True)
+                container = "mp4"
+            elif container is None:
                 container = self.exporter.preview(source, tracks, Path(temp), Event())
             else:
                 self.exporter.mux(source, tracks, container, Path(temp), Event(), preview=True)
@@ -347,6 +592,7 @@ class ExportService:
             title=str(video["title"]),
             youtube_id=str(video["youtube_id"]),
             quality=self._quality(video, asset),
+            subtitle_form=subtitle_form,
         )
         return snapshot.model_dump()
 
@@ -360,6 +606,7 @@ class ExportService:
             confirmed.original_version_id,
             confirmed.source_version_id,
             confirmed.container,
+            confirmed.subtitle_form,
         )
         if verified != confirmed.model_dump():
             raise ValueError("匯出摘要已變更，請重新確認格式與字幕軌")
@@ -380,21 +627,34 @@ class ExportService:
             # files plus converted subtitle tracks. Container overhead remains an estimate.
             subtitle_bytes = sum(len(track.srt.encode("utf-8")) for track in tracks)
             required = source.stat().st_size * 2 + subtitle_bytes * 2 + 16 * 1024 * 1024
+            if snapshot.subtitle_form == "burned":
+                # Re-encoded output at the target bitrate plus its publication copy.
+                estimate = self.exporter.burn_plan(source, cancel).estimated_bytes()
+                if estimate is not None:
+                    required = estimate * 2 + subtitle_bytes * 2 + 64 * 1024 * 1024
             if shutil.disk_usage(self.library.root).free < required:
                 raise SourceError("insufficient_space", "匯出空間不足，請清理後手動重試")
-            self.library.update_attempt(job_id, attempt, "exporting", 0)
+            burned = snapshot.subtitle_form == "burned"
+            self.library.update_attempt(job_id, attempt, "burning" if burned else "exporting", 0)
             with TemporaryDirectory(
                 prefix=".export-", dir=self.library.video_dir(video_id)
             ) as temp:
                 directory = Path(temp)
+
+                def report(fraction: float | None) -> None:
+                    self.library.update_attempt(job_id, attempt, "burning", fraction)
+
                 try:
-                    output = self.exporter.mux(
-                        source, tracks, snapshot.container, directory, cancel
-                    )
+                    if burned:
+                        output = self.exporter.burn(source, tracks[0], directory, cancel, report)
+                    else:
+                        output = self.exporter.mux(
+                            source, tracks, snapshot.container, directory, cancel
+                        )
                 except SourceError:
                     if cancel.is_set():
                         return
-                    if snapshot.container == "mp4":
+                    if snapshot.container == "mp4" and not burned:
                         # A changed container requires a new confirmed snapshot.
                         self.exporter.mux(
                             source, tracks, "mkv", directory / "fallback", cancel, preview=True
@@ -405,7 +665,7 @@ class ExportService:
                     raise
                 if cancel.is_set():
                     return
-                self.library.update_attempt(job_id, attempt, "verifying", 0.9)
+                self.library.update_attempt(job_id, attempt, "verifying", None if burned else 0.9)
                 export_id = uuid4().hex
                 filename = export_filename(
                     snapshot.title,
@@ -427,8 +687,8 @@ class ExportService:
                     published.append(self.library.publish(relative, write, lambda stream: None))
                     db.execute(
                         "INSERT INTO export_artifacts "
-                        "(id,video_id,job_id,path,container,summary,checksum) "
-                        "VALUES(?,?,?,?,?,?,?)",
+                        "(id,video_id,job_id,path,container,summary,checksum,subtitle_form) "
+                        "VALUES(?,?,?,?,?,?,?,?)",
                         (
                             export_id,
                             video_id,
@@ -437,6 +697,7 @@ class ExportService:
                             snapshot.container,
                             snapshot.model_dump_json(),
                             digest,
+                            snapshot.subtitle_form,
                         ),
                     )
 
