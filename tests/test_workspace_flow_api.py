@@ -419,3 +419,44 @@ def test_export_keeps_the_frozen_choices_and_threads_include_original(tmp_path: 
         assert [track.version_id for track in exporter.tracks] == [translated["id"], original["id"]]
         # The edit still belongs to the video; only the frozen flow kept its own source.
         assert library.get_video(video_id)["translation_source_version_id"] == other["id"]
+
+
+def test_flow_reclaims_a_queued_download_left_unlinked_by_a_crash(tmp_path: Path) -> None:
+    """A crash between `create_job` and the worker leaves a queued job with no flow.
+
+    `create_job` dedupes on (video, format, audio), so the next flow reuses that job.
+    Returning it unlinked made `on_job_finished` ignore its own download and the flow
+    never left `running`: every later start was answered with 409 and nothing could
+    end it. The reused job has to adopt the caller's flow.
+    """
+    library = Library(tmp_path / "library")
+    library.initialize()
+    adapter = FlowAdapter("en")
+    settings = replace(load_settings(tmp_path), library_dir=library.root)
+    with TestClient(
+        create_app(
+            settings,
+            adapter,
+            asr_adapter=FakeASR(),
+            media_exporter=MediaExporter(FakeFFmpeg()),
+        ),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        crashed = library.create_flow(
+            video["id"], "download", {"height": 720, "target_language": "en"}
+        )
+        library.update_flow(str(crashed["id"]), status="interrupted")
+        orphan = library.create_job(video["id"], "v", "a")
+        assert orphan["flow_id"] is None and orphan["status"] == "queued"
+
+        started = start_flow(client, video["id"], "en")
+        assert started.status_code == 200, started.text
+        flow_id = started.json()["flow"]["id"]
+        assert started.json()["job"]["id"] == orphan["id"]
+        assert library.get_job(str(orphan["id"]))["flow_id"] == flow_id
+        status = wait_for_flow(client, flow_id)
+        assert {stage["status"] for stage in status["stages"]} == {"completed"}
+        assert confirm(client, video["id"], target_language="en").json()["busy"] is False

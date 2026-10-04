@@ -342,7 +342,19 @@ class Library:
             )
             row = cursor.fetchone()
             if row is not None:
-                return dict(zip((column[0] for column in cursor.description), row, strict=True))
+                # Reuse an equivalent download, but honour the caller's flow: a job left
+                # `queued` by a crash has no flow, and returning it unlinked would strand
+                # the new flow running forever because the completion hook ignores it.
+                existing = dict(zip((column[0] for column in cursor.description), row, strict=True))
+                if flow_id is None or str(existing["flow_id"]) == str(flow_id):
+                    return existing
+                connection.execute(
+                    "UPDATE jobs SET flow_id = ?, updated_at = ? WHERE id = ?",
+                    (flow_id, now, existing["id"]),
+                )
+                return self._record(
+                    connection.execute("SELECT * FROM jobs WHERE id = ?", (existing["id"],))
+                )
             job_id = uuid4().hex
             connection.execute(
                 "INSERT INTO jobs (id,kind,status,created_at,updated_at,video_id,"
