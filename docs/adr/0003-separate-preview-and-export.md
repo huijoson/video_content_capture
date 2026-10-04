@@ -18,3 +18,6 @@ Q15 進一步確認成品保留來源影音串流，格式相容時優先 MP4，
 
 來源：[設計訪談 Q14、Q15](../design/youtube-workspace-interview.md)與
 [官方相容性查證](../design/media-compatibility-notes.md)。
+
+2026-10-04 修訂：燒錄字幕成品必須重新編碼，為本決策「成品不轉碼」的例外，見
+[ADR 0004](0004-burned-in-subtitle-export.md)。可切換字幕軌成品仍依本決策 stream copy。
