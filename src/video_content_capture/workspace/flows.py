@@ -11,7 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from video_content_capture.workspace.config import WorkspaceSettings
-from video_content_capture.workspace.exports import ExportService
+from video_content_capture.workspace.exports import ExportService, ExportSnapshot, SnapshotTrack
 from video_content_capture.workspace.jobs import fingerprint
 from video_content_capture.workspace.quality import (
     SubtitleForm,
@@ -69,6 +69,9 @@ class FlowSnapshot(FlowChoice):
     audio_id: str = Field(min_length=1, max_length=200)
     container: Literal["mp4", "mkv"]
     translate: bool
+    # Only set when a complete original already existed at start; a version the flow
+    # acquires itself is identified through that acquisition job instead.
+    source_version_id: str | None = Field(default=None, max_length=32)
 
 
 def flow_steps(translate: bool) -> list[str]:
@@ -82,6 +85,35 @@ def flow_steps(translate: bool) -> list[str]:
 def same_language(left: str | None, right: str | None) -> bool:
     """Exact tags after case folding: zh-TW and zh-CN stay different languages."""
     return left is not None and right is not None and left.casefold() == right.casefold()
+
+
+def bilingual_burning_supported() -> bool:
+    """Probe the export contract: bilingual burning arrives with the #5 export change."""
+    try:
+        ExportSnapshot(
+            asset_id="probe",
+            source_version_id=None,
+            target_version_ids=["probe"],
+            target_languages=["zh-TW"],
+            include_original=True,
+            original_version_id=None,
+            container="mp4",
+            tracks=[
+                SnapshotTrack(version_id="probe", language="zh-TW", name="target"),
+                SnapshotTrack(version_id="origin", language="en", name="original"),
+            ],
+            title="probe",
+            youtube_id="abcdefghijk",
+            quality="1080p-30fps",
+            subtitle_form="burned",
+        )
+    except ValueError:
+        return False
+    return True
+
+
+# Frozen once for the process: the confirm screen and start must agree.
+BILINGUAL_BURNED = bilingual_burning_supported()
 
 
 class FlowService:
@@ -127,10 +159,20 @@ class FlowService:
         # An unknown original language cannot be assumed to match the target.
         return target is None or not same_language(source.original_language, target)
 
+    def _frozen_source_version(self, video: Record) -> str | None:
+        """An already selected complete original is part of the frozen plan (人工／匯入)."""
+        selected = video["translation_source_version_id"]
+        if selected is None:
+            return None
+        version = self.library.get_subtitle_version(str(selected))
+        if not version["complete"] or version["source_type"] == "translation":
+            return None
+        return str(selected)
+
     def confirm(
         self, video_id: str, height: int | None = None, target_language: str | None = None
     ) -> Record:
-        """Read-only confirm screen: everything the user sees before pressing 開始."""
+        """Read-only confirm screen: what the flow will do before the user presses 開始處理."""
         video = self._video(video_id)
         source = self._source(video)
         chosen = default_resolution(source) if height is None else height
@@ -148,26 +190,31 @@ class FlowService:
             "resolution": chosen,
             "default_resolution": default_resolution(source),
             "resolutions": available_resolutions(source),
+            "audio": default_audio(source).model_dump(mode="json"),
             "original_language": source.original_language,
             "original_source": original,
             "original_source_label": ORIGINAL_SOURCE_LABELS.get(original, original),
-            "audio": default_audio(source).model_dump(mode="json"),
             # The default form is burned (ADR 0004), so MP4 is the headline output format.
             "subtitle_form": "burned",
+            "subtitle_forms": {
+                "burned": burned.output_container,
+                "tracks": tracks.output_container,
+            },
             "output_format": burned.output_container,
-            "output_formats": {"burned": burned.output_container, "tracks": tracks.container},
             "steps": flow_steps(True if translate is None else translate),
             "needs_translation": translate,
+            # 「原文＋目標」 only means something when a translation actually happens.
             "bilingual_allowed": translate is not False,
+            "bilingual_burned": BILINGUAL_BURNED,
             "gemini_configured": bool(self.settings.gemini_api_key),
             "blocked_reason": MISSING_KEY_CODE if missing else None,
             "busy": self.library.active_flow(video_id) is not None,
         }
 
     def _expected_original(self, video: Record, source: SourceMetadata) -> str:
-        selected = video["translation_source_version_id"]
+        selected = self._frozen_source_version(video)
         if selected is not None:
-            return str(self.library.get_subtitle_version(str(selected))["source_type"])
+            return str(self.library.get_subtitle_version(selected)["source_type"])
         language = source.original_language
         tracks = [track for track in source.subtitles if track.language == language]
         if language is not None and any(not track.automatic for track in tracks):
@@ -187,7 +234,7 @@ class FlowService:
             raise FlowError("目標語系與原文相同，雙語字幕無法啟用，請改用單一語系")
         if translate and not self.settings.gemini_api_key:
             raise FlowKeyError(MISSING_KEY_MESSAGE)
-        if choice.subtitle_form == "burned" and choice.include_original:
+        if choice.subtitle_form == "burned" and choice.include_original and not BILINGUAL_BURNED:
             raise FlowError("燒錄字幕目前僅支援單一語系，雙語請改用可選字幕軌或取消「原文＋目標」")
         resolved = resolve_source(source, choice.height, choice.subtitle_form)
         snapshot = FlowSnapshot(
@@ -196,6 +243,7 @@ class FlowService:
             audio_id=resolved.audio_id,
             container=resolved.container,
             translate=translate,
+            source_version_id=self._frozen_source_version(video),
         )
         if self.library.active_flow(video_id) is not None:
             raise FlowConflictError(BUSY_MESSAGE)
@@ -210,7 +258,7 @@ class FlowService:
         return flow, job
 
     def on_job_finished(self, job_id: str) -> None:
-        """Completion hook: a broken chain fails the flow instead of the worker."""
+        """Completion hook; a broken chain fails the flow rather than the worker."""
         try:
             job = self.library.get_job(job_id)
         except ValueError:
@@ -238,15 +286,61 @@ class FlowService:
         if job["kind"] == "export":
             return self.library.update_flow(flow_id, status="completed")
         if job["kind"] == "subtitles":
-            source_version_id = self._source_version_id(video_id)
-            language = self._language(source_version_id)
-            if snapshot.translate and not same_language(language, snapshot.target_language):
-                job = self.translation.create(video_id, source_version_id, snapshot.target_language)
-                return self._chain(flow_id, "translation", job)
-            # The acquired original already is the target language: nothing to translate.
-            return self._chain(flow_id, "export", self._export_job(flow, snapshot))
+            return self._after_subtitles(flow, snapshot, job)
         asset_id = self._asset_id(video_id, str(job["format_id"]), str(job["audio_id"]))
         return self._chain(flow_id, "subtitles", self.acquisition.create(video_id, asset_id))
+
+    def _after_subtitles(self, flow: Record, snapshot: FlowSnapshot, job: Record) -> Record:
+        flow_id, video_id = str(flow["id"]), str(flow["video_id"])
+        source_version_id = self._acquired_source(flow_id, snapshot, job)
+        language = str(self.library.get_subtitle_version(source_version_id)["language"])
+        if snapshot.translate and not same_language(language, snapshot.target_language):
+            translation = self.translation.create(
+                video_id, source_version_id, snapshot.target_language
+            )
+            if translation["status"] == "completed":
+                # An identical finished translation was reused; skip straight to export.
+                target_version_id = str(
+                    json.loads(str(translation["snapshot"]))["target_version_id"]
+                )
+                return self._chain(
+                    flow_id,
+                    "export",
+                    self._export_job(flow, snapshot, source_version_id, target_version_id),
+                )
+            return self._chain_translation(flow_id, translation)
+        # The acquired original already is the target language: nothing to translate.
+        return self._chain(
+            flow_id,
+            "export",
+            self._export_job(flow, snapshot, source_version_id, source_version_id),
+        )
+
+    def _chain_translation(self, flow_id: str, translation: Record) -> Record:
+        self.library.set_job_flow(str(translation["id"]), flow_id)
+        self.library.update_flow(flow_id, stage="translation")
+        self.enqueue(translation)
+        return self.library.get_flow(flow_id)
+
+    def _acquired_source(self, flow_id: str, snapshot: FlowSnapshot, job: Record) -> str:
+        """Which original the flow translates: frozen at start, else the job's own snapshot."""
+        if snapshot.source_version_id is not None:
+            return snapshot.source_version_id
+        acquired = json.loads(str(job["snapshot"]))
+        candidates = [
+            version
+            for version in self.library.subtitle_versions(str(job["video_id"]))
+            if version["complete"]
+            and version["source_type"] != "translation"
+            and (acquired.get("language") is None or version["language"] == acquired["language"])
+            and (
+                acquired.get("source_type") is None
+                or version["source_type"] == acquired["source_type"]
+            )
+        ]
+        if candidates:
+            return str(candidates[-1]["id"])
+        raise FlowError("找不到這條流程取得的原文字幕版本")
 
     def _chain(self, flow_id: str, stage: str, job: Record) -> Record:
         self.library.set_job_flow(str(job["id"]), flow_id)
@@ -254,16 +348,15 @@ class FlowService:
         self.enqueue(job)
         return self.library.get_flow(flow_id)
 
-    def _export_job(self, flow: Record, snapshot: FlowSnapshot) -> Record:
-        video_id = str(flow["video_id"])
-        flow_id = str(flow["id"])
-        source_version_id = self._source_version_id(video_id)
+    def _export_job(
+        self, flow: Record, snapshot: FlowSnapshot, source_version_id: str, target_version_id: str
+    ) -> Record:
+        video_id, flow_id = str(flow["video_id"]), str(flow["id"])
         asset_id = self._asset_for_flow(flow_id, video_id)
-        # Only a translated export is bilingual; the original track is the frozen source version.
         preview = self.exporter.preview(
             video_id,
             asset_id,
-            [self._target_version_id(flow_id, source_version_id)],
+            [target_version_id],
             snapshot.include_original,
             source_version_id if snapshot.include_original else None,
             source_version_id,
@@ -271,12 +364,6 @@ class FlowService:
             snapshot.subtitle_form,
         )
         return self.exporter.create(video_id, preview)
-
-    def _target_version_id(self, flow_id: str, source_version_id: str) -> str:
-        for job in self.library.flow_jobs(flow_id):
-            if job["kind"] == "translation" and job["status"] == "completed":
-                return str(json.loads(str(job["snapshot"]))["target_version_id"])
-        return source_version_id
 
     def _asset_for_flow(self, flow_id: str, video_id: str) -> str:
         for job in self.library.flow_jobs(flow_id):
@@ -291,50 +378,24 @@ class FlowService:
                 return str(asset["id"])
         raise FlowError("找不到這條流程下載的影音")
 
-    def _source_version_id(self, video_id: str) -> str:
-        video = self._video(video_id)
-        selected = video["translation_source_version_id"]
-        if selected is not None:
-            version = self.library.get_subtitle_version(str(selected))
-            if version["complete"]:
-                return str(selected)
-        candidates = [
-            version
-            for version in self.library.subtitle_versions(video_id)
-            if version["complete"] and version["source_type"] != "translation"
-        ]
-        if not candidates:
-            raise FlowError("找不到可翻譯的完整原文字幕版本")
-        return str(candidates[-1]["id"])
-
-    def _language(self, version_id: str) -> str:
-        return str(self.library.get_subtitle_version(version_id)["language"])
-
     def status(self, flow_id: str) -> Record:
         """Per-stage progress plus the finished artifact the UI offers as 「下載影片」."""
         flow = self.library.get_flow(flow_id)
         snapshot = FlowSnapshot.model_validate_json(str(flow["snapshot"]))
         jobs = {str(job["kind"]): job for job in self.library.flow_jobs(flow_id)}
-        stages: list[Record] = []
-        reached = False
-        for stage in reversed(flow_steps(snapshot.translate)):
-            job = jobs.get(stage)
-            reached = reached or job is not None
-            stages.append(
-                {
-                    "stage": stage,
-                    "status": str(job["status"]) if job is not None else "pending",
-                    "detail": str(job["stage"]) if job is not None else None,
-                    "progress": job["progress"] if job is not None else None,
-                    "error_code": job["error_code"] if job is not None else None,
-                    "job_id": str(job["id"]) if job is not None else None,
-                    # An empty stage behind a started later stage was skipped, not pending.
-                    "skipped": job is None and stage == "translation" and reached,
-                }
-            )
-        stages.reverse()
-        export_job = jobs.get("export")
+        stages = [
+            {
+                "stage": stage,
+                "status": str(jobs[stage]["status"]) if stage in jobs else "pending",
+                "detail": str(jobs[stage]["stage"]) if stage in jobs else None,
+                "progress": jobs[stage]["progress"] if stage in jobs else None,
+                "error_code": jobs[stage]["error_code"] if stage in jobs else None,
+                "job_id": str(jobs[stage]["id"]) if stage in jobs else None,
+            }
+            for stage in flow_steps(snapshot.translate)
+        ]
         artifact = None
+        export_job = jobs.get("export")
         if export_job is not None:
             artifact = next(
                 (
@@ -353,6 +414,7 @@ class FlowService:
 
 
 __all__ = [
+    "BILINGUAL_BURNED",
     "BUSY_MESSAGE",
     "FlowChoice",
     "FlowConflictError",
@@ -362,6 +424,7 @@ __all__ = [
     "FlowSnapshot",
     "MISSING_KEY_CODE",
     "MISSING_KEY_MESSAGE",
+    "bilingual_burning_supported",
     "flow_steps",
     "same_language",
 ]
