@@ -383,3 +383,28 @@ def test_qa_runs_while_media_job_is_running(tmp_path):
     )
     with pytest.raises(ValueError):
         start(library, other)
+
+
+def test_provider_failure_logs_redacted_warning_without_question(tmp_path, caplog):
+    import logging
+
+    from google.genai.errors import ClientError
+
+    library, video_id, conversation, fake, service = setup_qa(tmp_path)
+
+    class Rejected:
+        def answer(self, *args):
+            raise ClientError(400, {"error": {"message": "API key not valid qa-sentinel"}})
+
+    service.adapter = Rejected()
+    message = service.create(str(conversation["id"]), "private question text")
+    with caplog.at_level(logging.WARNING, logger="vcc.workspace"):
+        job = run_message(library, service, message)
+    assert job["error_code"] == "qa_key_invalid"
+    records = [r for r in caplog.records if r.name == "vcc.workspace"]
+    assert len(records) == 1 and records[0].levelno == logging.WARNING
+    line = records[0].getMessage()
+    for part in (str(job["id"]), "stage=qa", "code=400", "[REDACTED]"):
+        assert part in line
+    assert "qa-sentinel" not in line
+    assert "private question text" not in line

@@ -223,3 +223,36 @@ def test_injection_in_question_and_memory_stays_in_data_contents(monkeypatch):
     assert sent["question"] == attack
     system, _ = observed[1][1]["contents"]
     assert system.parts[0].text == SYSTEM_INSTRUCTION
+
+
+def test_generation_uses_json_schema_not_response_schema(monkeypatch):
+    from video_content_capture.workspace.qa import StructuredAnswer
+
+    observed = install_fake(monkeypatch)
+    GeminiQAAdapter().answer(SecretStr("fake"), "model", cues(), [], "Q")
+    config = observed[2][1]["config"]
+    assert config.response_schema is None
+    assert config.response_json_schema == StructuredAnswer.model_json_schema()
+
+
+def test_developer_api_generate_config_has_no_additional_properties(monkeypatch):
+    from google.genai import models
+
+    observed = install_fake(monkeypatch)
+    GeminiQAAdapter().answer(SecretStr("fake"), "model", cues(), [], "Q")
+    config = observed[2][1]["config"]
+    assert "additional_properties" not in config.model_dump(exclude_none=True)
+    wire = models._GenerateContentConfig_to_mldev(SimpleNamespace(vertexai=False), config, {})
+    assert "responseSchema" not in wire
+    assert wire["responseJsonSchema"] == config.response_json_schema
+
+
+def test_gemini_invalid_key_400_maps_to_qa_key_invalid():
+    from google.genai.errors import APIError
+
+    from video_content_capture.workspace.qa import provider_error
+
+    body = {"error": {"message": "API key not valid. Please pass a valid API key."}}
+    assert provider_error(APIError(400, body)) == "qa_key_invalid"
+    plain = {"error": {"message": "Bad field"}}
+    assert provider_error(APIError(400, plain)) == "qa_provider_request_failed"

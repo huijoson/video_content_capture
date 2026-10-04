@@ -196,7 +196,8 @@ class GeminiQAAdapter:
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
                     response_mime_type="application/json",
-                    response_schema=StructuredAnswer,
+                    # The Developer API rejects response_schema's additional_properties.
+                    response_json_schema=StructuredAnswer.model_json_schema(),
                     max_output_tokens=MAX_OUTPUT_TOKENS,
                     temperature=0,
                 ),

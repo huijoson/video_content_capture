@@ -15,6 +15,7 @@ from video_content_capture.workspace.qa import (
     provider_error,
 )
 from video_content_capture.workspace.storage import Library, Record
+from video_content_capture.workspace.translation import log_provider_failure
 
 
 class QAService:
@@ -89,6 +90,7 @@ class QAService:
                 # Fenced: stale attempt or changed owner. Never write the late answer.
                 self.library.update_attempt(job_id, attempt, "failed", error="qa_owner_changed")
         except errors.APIError as error:
+            log_provider_failure(job_id, "qa", error, self.settings)
             code = provider_error(error)
             self.library.update_attempt(job_id, attempt, "failed", error=code)
         except QAError as error:

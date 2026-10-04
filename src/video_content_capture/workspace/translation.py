@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import re
 import threading
 from dataclasses import dataclass
@@ -17,16 +18,30 @@ from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 from video_content_capture.redaction import scrub_text
 from video_content_capture.workspace.config import WorkspaceSettings
 from video_content_capture.workspace.jobs import StageStore
+from video_content_capture.workspace.security import public_text
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.subtitles import Cue
 
 RULE = "cue-text-v1"
 CHUNK_SIZE = 100
 INPUT_TOKEN_BUDGET = 900_000
+PROVIDER_MESSAGE_LIMIT = 300
+logger = logging.getLogger("vcc.workspace")
 
 
 class TranslationError(ValueError):
     pass
+
+
+def invalid_key(error: errors.APIError) -> bool:
+    """Gemini reports a bad key as 400 INVALID_ARGUMENT, not 401."""
+    if error.code != 400:
+        return False
+    body = error.details if isinstance(error.details, dict) else {}
+    inner = body.get("error")
+    details = (inner if isinstance(inner, dict) else body).get("details")
+    reasons = [item.get("reason") for item in details or [] if isinstance(item, dict)]
+    return "API_KEY_INVALID" in reasons or "API key not valid" in str(error.message or "")
 
 
 def provider_error(error: errors.APIError) -> str:
@@ -37,7 +52,9 @@ def provider_error(error: errors.APIError) -> str:
         429: "translation_rate_limited",
     }.get(
         error.code,
-        "translation_provider_unavailable"
+        "translation_key_invalid"
+        if invalid_key(error)
+        else "translation_provider_unavailable"
         if error.code >= 500
         else "translation_provider_request_failed",
     )
@@ -54,6 +71,22 @@ def provider_error(error: errors.APIError) -> str:
             except (ValueError, TypeError, OverflowError):
                 pass
     return code
+
+
+def log_provider_failure(
+    job_id: str, stage: str, error: errors.APIError, settings: WorkspaceSettings
+) -> None:
+    """One redacted diagnostic line; never prompts, cue text, questions, answers or keys."""
+    message = public_text(str(error.message or ""), settings)
+    message = " ".join(message.split())[:PROVIDER_MESSAGE_LIMIT]
+    logger.warning(
+        "Provider failure job=%s stage=%s code=%s status=%s message=%s",
+        job_id,
+        stage,
+        error.code,
+        public_text(str(error.status or ""), settings),
+        message,
+    )
 
 
 class TranslatedCue(BaseModel):
@@ -119,7 +152,8 @@ class GeminiTranslationAdapter:
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=TranslatedChunk,
+                    # The Developer API rejects response_schema's additional_properties.
+                    response_json_schema=TranslatedChunk.model_json_schema(),
                     max_output_tokens=65_536,
                     temperature=0,
                 ),
@@ -265,6 +299,7 @@ class TranslationService:
                     ),
                 )
         except errors.APIError as error:
+            log_provider_failure(job_id, "translation", error, self.settings)
             self.library.update_attempt(job_id, attempt, "failed", error=provider_error(error))
         except TranslationError as error:
             secret = self.settings.gemini_api_key

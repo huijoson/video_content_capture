@@ -25,7 +25,7 @@ const errorLabels = {
   source_language_unknown: "原語系未知；請從平台字幕選單選擇人工或自動字幕，再取得所選字幕。",
   subtitle_unavailable: "字幕已消失或無法取得，請重新查詢並選擇平台字幕；不會回退辨識。",
   subtitle_acquisition_failed: "字幕清單或取得失敗，請手動重試；未將失敗當作無字幕。",
-  translation_key_invalid: "Gemini 金鑰無效（401），請檢查 .env 的 GEMINI_API_KEY 並重啟服務。",
+  translation_key_invalid: "Gemini 金鑰無效，請檢查 .env 的 GEMINI_API_KEY 並重啟服務。",
   translation_permission_denied: "Gemini 權限不足（403），請確認帳戶與模型權限。",
   translation_model_missing: "翻譯模型不存在（404），請檢查 VCC_GEMINI_TRANSLATION_MODEL。",
   translation_rate_limited: "Gemini 超過配額（429），已完成塊保留；請依等待時間手動重試。",
@@ -878,6 +878,7 @@ function qaErrorLabel(code) {
     qa_token_count_failed: "無法計算輸入 token，請稍後重試。",
     qa_owner_changed: "對話或問答依據已變更，此回覆未寫入。",
     missing_gemini_key: "請在專案 .env 設定 GEMINI_API_KEY 並重新啟動服務。",
+    qa_key_invalid: "Gemini 金鑰無效，請檢查 .env 的 GEMINI_API_KEY 並重啟服務。",
     interrupted: "服務中斷；不會自動重送，請手動重試。",
   };
   return labels[code] || (code ? jobErrorLabel(code) : "未完成，可手動重試。");

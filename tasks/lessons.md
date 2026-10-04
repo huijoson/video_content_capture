@@ -271,3 +271,16 @@
   destructive browser script and count only the run on fresh data.
 - Tripwire: browser drives print PASS/FAIL per check and start by asserting the seeded fixture.
 
+
+## 2026-10-04 — Fake providers hid a request the real Gemini API rejects
+
+- Classification: missing verification.
+- Failure mode: translation and Q&A passed `extra="forbid"` Pydantic models as `response_schema`;
+  the SDK emitted `additional_properties`, which the Developer API rejects with 400 on every call.
+  627 offline tests passed because fakes replaced the client and never saw the request config.
+- Detection signal: first real-environment run failed in ~150 ms with `*_provider_request_failed`
+  and nothing in the log; a shell key that was also invalid masked the real cause at first.
+- Prevention rule: test the outgoing provider config through the SDK's own request transformer,
+  log provider failures (redacted), and make one minimal live call before declaring a provider
+  integration done.
+- Tripwire: `test_developer_api_config_has_no_additional_properties` in translation and Q&A tests.

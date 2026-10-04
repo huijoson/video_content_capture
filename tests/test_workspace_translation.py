@@ -270,3 +270,129 @@ def test_provider_status_codes_never_preserve_error_body(status, code):
     from video_content_capture.workspace.translation import provider_error
 
     assert provider_error(APIError(status, {"error": {"message": "secret-body"}})) == code
+
+
+def capture_generate_config(monkeypatch):
+    from types import SimpleNamespace
+
+    from pydantic import SecretStr
+
+    from video_content_capture.workspace.subtitles import Cue
+    from video_content_capture.workspace.translation import GeminiTranslationAdapter
+
+    observed = {}
+
+    class Models:
+        def count_tokens(self, **kwargs):
+            return SimpleNamespace(total_tokens=50)
+
+        def generate_content(self, **kwargs):
+            observed.update(kwargs)
+            return SimpleNamespace(
+                candidates=[SimpleNamespace(finish_reason=SimpleNamespace(value="STOP"))],
+                prompt_feedback=None,
+                text='{"cues":[{"id":"a","text":"你好"}]}',
+            )
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.models = Models()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr("video_content_capture.workspace.translation.genai.Client", Client)
+    GeminiTranslationAdapter().translate(
+        SecretStr("fake-key"), "model-fixed", "zh-TW", [Cue(id="a", start=0, end=1, text="hello")]
+    )
+    return observed["config"]
+
+
+def test_generation_uses_json_schema_not_response_schema(monkeypatch):
+    from video_content_capture.workspace.translation import TranslatedChunk
+
+    config = capture_generate_config(monkeypatch)
+    assert config.response_schema is None
+    assert config.response_json_schema == TranslatedChunk.model_json_schema()
+
+
+def test_developer_api_config_has_no_additional_properties(monkeypatch):
+    from types import SimpleNamespace
+
+    from google.genai import models
+
+    config = capture_generate_config(monkeypatch)
+    assert "additional_properties" not in config.model_dump(exclude_none=True)
+    # Same converter the SDK applies when vertexai=False.
+    wire = models._GenerateContentConfig_to_mldev(SimpleNamespace(vertexai=False), config, {})
+    assert "responseSchema" not in wire
+    assert wire["responseJsonSchema"] == config.response_json_schema
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "error": {
+                "code": 400,
+                "message": "secret-body",
+                "status": "INVALID_ARGUMENT",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "API_KEY_INVALID",
+                    }
+                ],
+            }
+        },
+        {
+            "error": {
+                "code": 400,
+                "message": "API key not valid. Please pass a valid API key.",
+                "status": "INVALID_ARGUMENT",
+            }
+        },
+    ],
+)
+def test_gemini_invalid_key_400_maps_to_key_invalid(body):
+    from google.genai.errors import APIError
+
+    from video_content_capture.workspace.translation import provider_error
+
+    assert provider_error(APIError(400, body)) == "translation_key_invalid"
+
+
+def test_plain_400_stays_request_failed():
+    from google.genai.errors import APIError
+
+    from video_content_capture.workspace.translation import provider_error
+
+    error = APIError(400, {"error": {"message": "Bad field", "status": "INVALID_ARGUMENT"}})
+    assert provider_error(error) == "translation_provider_request_failed"
+
+
+def test_provider_failure_logs_one_redacted_warning(tmp_path, caplog):
+    import logging
+
+    from google.genai.errors import ClientError
+
+    library, video_id, source, fake, service = setup_translation(tmp_path)
+
+    class Rejected:
+        def translate(self, *args):
+            raise ClientError(400, {"error": {"message": "bad key fake-sentinel", "status": "X"}})
+
+    service.adapter = Rejected()
+    job = service.create(video_id, str(source["id"]), "ja")
+    with caplog.at_level(logging.WARNING, logger="vcc.workspace"):
+        assert run_translation(library, service, job)["status"] == "failed"
+    records = [r for r in caplog.records if r.name == "vcc.workspace"]
+    assert len(records) == 1 and records[0].levelno == logging.WARNING
+    line = records[0].getMessage()
+    for part in (str(job["id"]), "stage=translation", "code=400", "status=X", "[REDACTED]"):
+        assert part in line
+    assert "fake-sentinel" not in line
+    assert "English" not in line

@@ -1,3 +1,77 @@
+# 2026-10-04 真實環境驗收（API 層）
+
+## Goal and acceptance criteria
+
+- 以真實 YouTube 影片（JvKPT_iDi7I，169 秒，使用者核可）與真實 Gemini 走完核心流程；
+  Chrome 自動化在本環境被關閉，改以 HTTP API 驗收（使用者同意），UI／播放器項目留給人工。
+
+## Checklist
+
+- [x] AC01 網址：watch／youtu.be／`&list=` 不展開；純清單、其他主機 400。
+- [x] 下載：136（H.264 720p）＋140（AAC）→ MP4，packet MD5 與來源一致（stream copy）；首次
+      `source_unavailable` 失敗、手動重試成功（原因不明，見待辦）。
+- [x] 媒體 Range 206、播放位置保存；服務重啟後位置／選擇／對話／工作紀錄皆保留（AC09 部分）。
+- [x] AC02：此片無平台字幕 → 本機 MLX 辨識（zh，116 cues）。平台字幕路徑與「原語系未知」分支**未實測**。
+- [x] AC04：有效 SRT 匯入、壞格式／超時長／錯誤格式拒絕；切換播放字幕不產生工作。
+- [x] AC05 翻譯（修正後）：gemini-3.5-flash-lite，2 塊（100＋16）約 10 秒；116/116 cue ID、時間
+      完全一致；未完成版本不發佈。10 句樣本見下方，待人工語義確認。
+- [x] AC03 匯出矩陣：四列＋MKV＋翻譯目標＋原文開，ffprobe 軌數／語言／標題／default 正確，影音
+      stream copy，抽出字幕與版本 SRT 一致；排隊中改選不影響快照。
+- [x] AC06 預覽：H.264 來源回 409（可直接播放）；VP9/Opus 來源 → H.264/AAC yuv420p faststart；
+      成品 sha256 前後不變；清除預覽只動預覽。
+- [x] AC07 問答（修正後，gemini-3.8-flash，5 題）：引用 cue 全部存在、start＝跳播時間；
+      內容／補充（標「未經網路查證」）／缺乏依據三欄分明；畫面問題不臆測；人工抽查語義忠實。
+- [x] AC08：記憶 0→4 遞增，失敗回覆不入記憶、重試成功後才入；換依據開新對話舊對話不變；
+      重複送出 409。8 輪上限只做程式碼確認。
+- [x] AC10：Host／Origin／CORS／CSP、路徑穿越、惡意字幕、`.env` 與環境變數優先序、log／DB 無金鑰。
+- [x] AC11：預算＝min(200,000, 上限−8,192−4,096)，程式碼確認；未實測超限。
+- [x] D5 刪除：錯誤確認碼 409／422、無 Origin 403、正確刪除後 DB 各表 0 列、目錄移除；
+      同 YouTube ID 可重新查詢。
+
+## Bugs found & fixed（分支 fix/gemini-structured-output）
+
+- **阻斷**：翻譯與問答以 Pydantic `extra="forbid"` 當 `response_schema`，SDK 轉成
+  `additional_properties`，Gemini Developer API 一律 400 INVALID_ARGUMENT → 所有真實呼叫失敗。
+  改用 `response_json_schema=<Model>.model_json_schema()`，加 SDK mldev 轉換回歸測試。
+- 無效金鑰（Gemini 回 400 `API_KEY_INVALID`）被歸為「請檢查模型設定」→ 改為 `*_key_invalid`，
+  UI 文案移除「(401)」，新增 `qa_key_invalid`。
+- provider 錯誤完全沒有 log → 失敗時記一行 redacted WARNING（不含提示、字幕、問答、金鑰）。
+- 驗證：ruff／format／mypy 通過；pytest 637 passed、1 skipped。
+
+## Environment note
+
+- 使用者 shell 的 `GEMINI_API_KEY` 無效且優先於 `.env`；驗收以
+  `env -u GEMINI_API_KEY -u GOOGLE_API_KEY uv run vcc serve` 啟動才使用 `.env` 的有效金鑰。
+
+## 翻譯樣本（待人工確認）
+
+| id | 原文 | 譯文 |
+| --- | --- | --- |
+| c000001 | 哇!阿文! | Wow! Ah-wen! |
+| c000011 | 哦!我現在在出去玩啦!的感覺 | Oh! The feeling of I am out playing now! |
+| c000024 | 吃個夜市也要噴3、400 | Eating at a night market also burns 300 to 400 |
+| c000048 | 最後買啤酒跟鹹酥器回飯店 | Finally buy beer and crispy chicken back to the hotel |
+| c000059 | 但其實我們沒什麼文化素養 | But actually we have little cultural literacy |
+| c000083 | 還能與全球高手較勁 | Can also compete with global masters |
+
+## 未驗證／待人工
+
+- [ ] Chrome／Safari 實播、引用跳播 UI、200% 放大、窄視窗分頁、VoiceOver。
+- [ ] VLC 開成品切軌（成品備份於本次 session scratchpad `acceptance/exports-for-vlc/`，臨時目錄）。
+- [ ] 平台字幕（人工／自動）與「原語系未知」路徑：需另一支有字幕的影片。
+- [ ] 翻譯／問答語義品質由使用者再抽查。
+
+## Follow-ups（未修，待決定）
+
+- 下載失敗時 stderr 被丟棄、無 log，首次 `source_unavailable` 無法診斷。
+- 下載完成後 `source/stage-*.bin` 暫存檔殘留（約等於來源大小）。
+- `subtitles/acquire` 對不存在的軌回 200，於工作中才以泛用錯誤失敗。
+- GET `/api/videos/{id}`、`/conversations` 可能建立對話（GET 有寫入、無 Origin 檢查）。
+- 伺服器 400／403 拒絕回應缺安全標頭；匯入不存在影片回 400 而非 404。
+- 畫質標籤顯示 30.0fps（實際 29.97）；引用時間為未四捨五入浮點數。
+
+---
+
 # 2026-10-04 S5 相容預覽、清理、整體 UI 與可及性
 
 ## Goal and acceptance criteria
