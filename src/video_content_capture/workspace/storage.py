@@ -24,7 +24,10 @@ from uuid import uuid4
 from video_content_capture.redaction import scrub_text
 from video_content_capture.workspace.subtitles import Cue, validate_cues, validate_language
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+# One-click flow stages reuse the existing job kinds, in this fixed order.
+FLOW_STAGES = ("download", "subtitles", "translation", "export")
+FLOW_ENDED = ("completed", "failed", "cancelled", "interrupted")
 Record = dict[str, object]
 _VIDEO_ID = re.compile(r"[0-9a-f]{32}\Z")
 _VIDEO_SUBDIRECTORIES = ("source", "subtitles", "previews", "exports")
@@ -199,6 +202,21 @@ class Library:
                     "ALTER TABLE export_artifacts ADD COLUMN subtitle_form TEXT NOT NULL "
                     "DEFAULT 'tracks'"
                 )
+        if version < 7:
+            # One-click flows coordinate the existing jobs; the job row carries its flow.
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS flows (id TEXT PRIMARY KEY, "
+                "video_id TEXT NOT NULL REFERENCES videos(id), status TEXT NOT NULL, "
+                "stage TEXT NOT NULL, snapshot TEXT NOT NULL, error_code TEXT, "
+                "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+            )
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS flows_one_running ON flows(video_id) "
+                "WHERE status = 'running'"
+            )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+            if "flow_id" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN flow_id TEXT REFERENCES flows(id)")
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @staticmethod
@@ -305,7 +323,9 @@ class Library:
             )
         return active
 
-    def create_job(self, video_id: str, format_id: str, audio_id: str) -> Record:
+    def create_job(
+        self, video_id: str, format_id: str, audio_id: str, flow_id: str | None = None
+    ) -> Record:
         now = datetime.now(UTC).isoformat()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -326,13 +346,15 @@ class Library:
             job_id = uuid4().hex
             connection.execute(
                 "INSERT INTO jobs (id,kind,status,created_at,updated_at,video_id,"
-                "format_id,audio_id) "
-                "VALUES (?,'download','queued',?,?,?,?,?)",
-                (job_id, now, now, video_id, format_id, audio_id),
+                "format_id,audio_id,flow_id) "
+                "VALUES (?,'download','queued',?,?,?,?,?,?)",
+                (job_id, now, now, video_id, format_id, audio_id, flow_id),
             )
             return self._record(connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)))
 
-    def create_snapshot_job(self, video_id: str, kind: str, snapshot: Record) -> Record:
+    def create_snapshot_job(
+        self, video_id: str, kind: str, snapshot: Record, flow_id: str | None = None
+    ) -> Record:
         if kind not in {"subtitles", "translation", "export", "qa", "preview"}:
             raise ValueError("Invalid job kind")
         encoded = json.dumps(snapshot, sort_keys=True, ensure_ascii=False)
@@ -348,9 +370,9 @@ class Library:
             )
             job_id = uuid4().hex
             connection.execute(
-                "INSERT INTO jobs (id,kind,status,created_at,updated_at,video_id,snapshot) "
-                "VALUES (?,?,'queued',?,?,?,?)",
-                (job_id, kind, now, now, video_id, encoded),
+                "INSERT INTO jobs (id,kind,status,created_at,updated_at,video_id,snapshot,"
+                "flow_id) VALUES (?,?,'queued',?,?,?,?,?)",
+                (job_id, kind, now, now, video_id, encoded, flow_id),
             )
             return self._record(connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)))
 
@@ -1203,6 +1225,7 @@ class Library:
                     "SELECT COUNT(*) FROM conversations WHERE video_id=? AND status='active'",
                 ),
                 ("exports", "SELECT COUNT(*) FROM export_artifacts WHERE video_id=?"),
+                ("flows", "SELECT COUNT(*) FROM flows WHERE video_id=?"),
                 (
                     "active_jobs",
                     "SELECT COUNT(*) FROM jobs WHERE video_id=? AND status IN ('queued','running')",
@@ -1281,9 +1304,109 @@ class Library:
                 f"DELETE FROM job_stages WHERE job_id IN {owned_jobs}",
                 "DELETE FROM media_assets WHERE video_id=?",
                 "DELETE FROM jobs WHERE video_id=?",
+                "DELETE FROM flows WHERE video_id=?",
                 "DELETE FROM videos WHERE id=?",
             ):
                 connection.execute(statement, (video_id,))
+
+    def create_flow(self, video_id: str, stage: str, snapshot: Record) -> Record:
+        """Freeze the confirm-screen choices so later UI edits cannot affect this flow."""
+        if stage not in FLOW_STAGES:
+            raise ValueError("Invalid flow stage")
+        encoded = json.dumps(snapshot, sort_keys=True, ensure_ascii=False)
+        if scrub_text(encoded) != encoded:
+            raise ValueError("Flow snapshot contains sensitive data")
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._record(
+                connection.execute(
+                    "SELECT * FROM videos WHERE id = ? AND deleting = 0", (video_id,)
+                )
+            )
+            if connection.execute(
+                "SELECT 1 FROM flows WHERE video_id = ? AND status = 'running'", (video_id,)
+            ).fetchone():
+                raise ValueError("Flow already in progress")
+            flow_id = uuid4().hex
+            connection.execute(
+                "INSERT INTO flows (id,video_id,status,stage,snapshot,created_at,updated_at) "
+                "VALUES (?,?,'running',?,?,?,?)",
+                (flow_id, video_id, stage, encoded, now, now),
+            )
+            return self._record(connection.execute("SELECT * FROM flows WHERE id = ?", (flow_id,)))
+
+    def get_flow(self, flow_id: str) -> Record:
+        with self._connect() as connection:
+            return self._record(
+                connection.execute(
+                    "SELECT flows.* FROM flows JOIN videos ON videos.id=flows.video_id "
+                    "WHERE flows.id = ? AND videos.deleting = 0",
+                    (flow_id,),
+                )
+            )
+
+    def flows(self, video_id: str) -> list[Record]:
+        self.get_video(video_id)
+        with self._connect() as connection:
+            return self._records(
+                connection.execute(
+                    "SELECT * FROM flows WHERE video_id = ? ORDER BY created_at,id", (video_id,)
+                )
+            )
+
+    def active_flow(self, video_id: str) -> Record | None:
+        self.get_video(video_id)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "SELECT * FROM flows WHERE video_id = ? AND status = 'running' "
+                "ORDER BY created_at,id LIMIT 1",
+                (video_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return dict(zip((column[0] for column in cursor.description), row, strict=True))
+
+    def flow_jobs(self, flow_id: str) -> list[Record]:
+        with self._connect() as connection:
+            return self._records(
+                connection.execute(
+                    "SELECT jobs.* FROM jobs JOIN videos ON videos.id=jobs.video_id "
+                    "WHERE jobs.flow_id = ? AND videos.deleting = 0 "
+                    "AND jobs.deleting = 0 ORDER BY jobs.created_at, jobs.id",
+                    (flow_id,),
+                )
+            )
+
+    def update_flow(
+        self,
+        flow_id: str,
+        *,
+        stage: str | None = None,
+        status: str | None = None,
+        error: str | None = None,
+    ) -> Record:
+        columns: dict[str, str | None] = {"updated_at": datetime.now(UTC).isoformat()}
+        if stage is not None:
+            if stage not in FLOW_STAGES:
+                raise ValueError("Invalid flow stage")
+            columns["stage"] = stage
+        if status is not None:
+            if status not in {"running", *FLOW_ENDED}:
+                raise ValueError("Invalid flow status")
+            columns["status"] = status
+        columns["error_code"] = scrub_text(error) if error else None
+        assignments = ", ".join(f"{column} = ?" for column in columns)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            changed = connection.execute(
+                f"UPDATE flows SET {assignments} WHERE id = ? AND status = 'running'",
+                (*columns.values(), flow_id),
+            ).rowcount
+            if changed != 1 and status is None:
+                raise ValueError("Flow is not running")
+            return self._record(connection.execute("SELECT * FROM flows WHERE id = ?", (flow_id,)))
 
     def interrupt_running(self) -> None:
         """Recovery never queues or resends an interrupted attempt."""
@@ -1292,6 +1415,10 @@ class Library:
             connection.execute(
                 "UPDATE jobs SET status = 'interrupted', updated_at = ? WHERE status = 'running' "
                 "OR (kind='qa' AND status='queued')",
+                (now,),
+            )
+            connection.execute(
+                "UPDATE flows SET status = 'interrupted', updated_at = ? WHERE status = 'running'",
                 (now,),
             )
             connection.execute(
