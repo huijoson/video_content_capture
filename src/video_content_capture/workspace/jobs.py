@@ -113,6 +113,7 @@ class MediaQueue:
         self.pending: list[str] = []
         self.active: dict[str, threading.Event] = {}
         self.stopping = False
+        self.on_finished: Callable[[str], None] | None = None
         self.thread = threading.Thread(target=self._worker, name=name, daemon=True)
 
     def start(self) -> None:
@@ -169,6 +170,12 @@ class MediaQueue:
             try:
                 self.process(job_id, event)
             finally:
+                # The completion hook chains the next flow stage; it must never stop the lane.
+                if self.on_finished is not None:
+                    try:
+                        self.on_finished(job_id)
+                    except Exception:
+                        logger.exception("Job completion hook failed job=%s", job_id)
                 with self.condition:
                     self.active.pop(job_id, None)
                     self.condition.notify_all()
@@ -320,6 +327,10 @@ class JobLanes:
 
     def enqueue(self, job: Record) -> None:
         self._lane(job).enqueue(job)
+
+    def bind(self, on_finished: Callable[[str], None]) -> None:
+        """Flow chaining runs on the media lane's completion hook, outside the serial worker."""
+        self.media.on_finished = on_finished
 
     def cancel(self, job_id: str) -> None:
         self._lane(self.library.get_job(job_id)).cancel(job_id)

@@ -1379,6 +1379,19 @@ class Library:
                 )
             )
 
+    def set_job_flow(self, job_id: str, flow_id: str) -> None:
+        """Attach a chained job to its flow so progress and cleanup stay grouped."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                connection.execute(
+                    "UPDATE jobs SET flow_id = ?, updated_at = ? WHERE id = ? AND deleting = 0",
+                    (flow_id, datetime.now(UTC).isoformat(), job_id),
+                ).rowcount
+                != 1
+            ):
+                raise ValueError("Job not found")
+
     def update_flow(
         self,
         flow_id: str,
