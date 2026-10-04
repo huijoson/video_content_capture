@@ -38,6 +38,8 @@ const errorLabels = {
   translation_empty: "翻譯含空文字，未發佈；請手動重試。",
   translation_failed: "翻譯失敗，已完成塊保留；請檢查設定並手動重試。",
   download_failed: "下載失敗，請確認網路及公開來源可用後手動重試。",
+  hardware_encoder_unavailable: "VideoToolbox 硬體編碼不可用，無法燒錄字幕；不會改用軟體編碼或降低畫質。來源與字幕已保留。",
+  burn_failed: "燒錄字幕輸出失敗；來源與字幕已保留，可手動重試。",
 };
 const stageLabels = {
   translation: "翻譯字幕", exporting: "封裝成品", subtitles: "取得字幕",
@@ -47,6 +49,7 @@ const stageLabels = {
   completed: "處理完成", failed: "處理失敗",
   download: "下載影音", merge: "合併影音", verify: "驗證媒體", publish: "發佈媒體",
   preview: "製作相容預覽", previewing: "製作相容預覽", qa: "影片問答", export: "匯出影片",
+  burning: "燒錄字幕",
 };
 let currentVideo = null;
 let jobs = [];
@@ -205,7 +208,7 @@ function renderVideo(video, preserveSelection = false) {
   const sameVideo = currentVideo?.id === video.id;
   const selectedHeight = preserveSelection && sameVideo ? Number(element("resolution").value) : null;
   currentVideo = video;
-  if (!sameVideo) { element("include-original").checked = false; element("export-container").value = ""; element("subtitle-language").value = "zh-TW"; }
+  if (!sameVideo) { element("include-original").checked = false; element("export-container").value = ""; element("export-form").value = "burned"; element("subtitle-language").value = "zh-TW"; }
   element("video-details").hidden = false;
   element("video-title").textContent = video.title;
   element("video-source").textContent = `時長：${video.duration == null ? "未知" : `${Math.round(video.duration)} 秒`} · YouTube`;
@@ -637,6 +640,7 @@ function renderSubtitles(video, preserveSelection = false) {
   options(element("subtitle-language"), languages.map((id) => ({ id })), selected, (v) => v.id);
   element("subtitle-language").disabled = false;
   element("include-original").disabled = false;
+  updateExportForm();
   const platform = (video.metadata?.subtitles || []).map((v) => ({ ...v, source_type: v.automatic ? "platform_auto" : "platform_manual", id: `${v.automatic ? "platform_auto" : "platform_manual"}:${v.language}` }));
   options(element("platform-subtitle"), platform, platform[0]?.id, (v) => `${v.language} · ${v.source_type}`);
   element("use-platform-subtitle").disabled = !platform.length || !video.assets?.length;
@@ -650,7 +654,8 @@ function renderSubtitles(video, preserveSelection = false) {
     link.href = `/api/exports/${controlled(artifact.id)}/download`;
     let tracks = "";
     try { tracks = JSON.parse(artifact.summary).tracks.map((track) => `${track.language} · ${track.name}`).join("；"); } catch { /* Older summaries remain downloadable. */ }
-    link.textContent = `可下載 · ${artifact.container.toUpperCase()} · ${tracks} · ${artifact.id.slice(0, 8)}`;
+    const form = artifact.subtitle_form === "burned" ? "燒錄字幕" : "字幕軌";
+    link.textContent = `可下載 · ${artifact.container.toUpperCase()} · ${form} · ${tracks} · ${artifact.id.slice(0, 8)}`;
     item.append(link);
     element("export-list").append(item);
   }
@@ -659,7 +664,15 @@ function renderSubtitles(video, preserveSelection = false) {
 for (const [id, selection] of [["translation-source", "translation-source"], ["export-target", "export-selection"]]) {
   element(id).addEventListener("change", () => chooseSubtitle(selection, element(id).value).catch(showError));
 }
-for (const id of ["include-original", "export-original", "subtitle-language", "export-container"]) {
+// Burned exports are a single-language MP4; container and extra tracks apply to tracks only.
+function updateExportForm() {
+  const burned = element("export-form").value === "burned";
+  if (burned) { element("include-original").checked = false; element("export-container").value = ""; }
+  element("include-original").disabled = burned || !currentVideo;
+  element("export-container").disabled = burned;
+}
+element("export-form").addEventListener("change", updateExportForm);
+for (const id of ["include-original", "export-original", "subtitle-language", "export-container", "export-form"]) {
   element(id).addEventListener("change", invalidateExport);
 }
 
@@ -726,12 +739,18 @@ element("export-preview").addEventListener("click", async () => {
       include_original: element("include-original").checked,
       original_version_id: element("export-original").value || null,
       container: element("export-container").value || null,
+      subtitle_form: element("export-form").value,
     });
     if (currentVideo?.id !== id || generation !== exportGeneration) return;
     exportSnapshot = snapshot;
-    element("export-summary").textContent = `${snapshot.container.toUpperCase()} · 字幕軌：${snapshot.tracks.map((track) => `${track.language} · ${track.name || track.version_id}`).join("；") || "無字幕"}。建立工作後固定此快照。`;
+    element("export-summary").textContent = snapshot.subtitle_form === "burned"
+      ? `MP4（H.264 硬體編碼＋AAC，解析度不變）· 燒錄字幕：${snapshot.tracks.map((track) => `${track.language} · ${track.name || track.version_id}`).join("；")}。建立工作後固定此快照。`
+      : `${snapshot.container.toUpperCase()} · 字幕軌：${snapshot.tracks.map((track) => `${track.language} · ${track.name || track.version_id}`).join("；") || "無字幕"}。建立工作後固定此快照。`;
     element("export-start").disabled = false;
-  } catch (error) { showError(error); }
+  } catch (error) {
+    if (error.status === 409) element("export-summary").textContent = errorLabels.hardware_encoder_unavailable;
+    else showError(error);
+  }
   finally { button.disabled = false; }
 });
 element("export-start").addEventListener("click", async () => {

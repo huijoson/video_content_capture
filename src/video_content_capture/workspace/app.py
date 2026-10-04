@@ -96,6 +96,7 @@ class ExportRequest(BaseModel):
     include_original: bool = False
     original_version_id: str | None = None
     container: str | None = Field(default=None, pattern="^(mp4|mkv)$")
+    subtitle_form: Literal["burned", "tracks"] = "tracks"
 
 
 class ConfirmExportRequest(BaseModel):
@@ -499,8 +500,15 @@ def create_app(
                 body.original_version_id,
                 str(source_id) if source_id else None,
                 body.container,
+                body.subtitle_form,
             )
-        except (ValueError, SourceError):
+        except SourceError as error:
+            if error.code == "hardware_encoder_unavailable":
+                raise HTTPException(
+                    409, "此 Mac 無法使用 VideoToolbox 硬體編碼，無法燒錄字幕（不改用軟體編碼）"
+                ) from None
+            raise HTTPException(400, "請選擇有效影音及完整字幕，並確認本機 ffmpeg 可用") from None
+        except ValueError:
             raise HTTPException(400, "請選擇有效影音及完整字幕，並確認本機 ffmpeg 可用") from None
 
     @app.post("/api/videos/{video_id}/exports")

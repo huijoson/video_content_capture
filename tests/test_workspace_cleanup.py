@@ -62,7 +62,8 @@ def seed(tmp_path: Path, youtube_id: str = "abcdefghijk"):
             ),
         )
         connection.execute(
-            "INSERT INTO export_artifacts VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO export_artifacts (id,video_id,job_id,path,container,summary,checksum) "
+            "VALUES (?,?,?,?,?,?,?)",
             (
                 "export",
                 video_id,
