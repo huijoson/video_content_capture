@@ -420,7 +420,10 @@ function renderFlow() {
   blocked.textContent = language?.blocked_reason
     ? `需要翻譯但尚未設定 Gemini 金鑰：${flowsBlockedMessage(language.blocked_reason)}`
     : "";
-  element("flow-include-original").disabled = !selected || language.bilingual_allowed === false;
+  // 「原文＋目標」 needs a target language and an actual translation to mean anything.
+  const hasTarget = Boolean(element("flow-language").value);
+  element("flow-include-original").disabled = !selected || !hasTarget || language.bilingual_allowed === false;
+  if (!hasTarget || language?.bilingual_allowed === false) element("flow-include-original").checked = false;
   renderFlowFacts();
   renderFlowStatus();
   updateStartButton();
