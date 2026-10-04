@@ -93,6 +93,80 @@ VCC_RETRY_BASE_DELAY_SECONDS=1.0
 設定優先順序為「CLI 明確值 > 環境變數 > 預設值」。金鑰使用 `SecretStr`，並由 CLI
 的 redaction filter 從錯誤與日誌中移除。
 
+## YouTube 本機工作區（`vcc serve`）
+
+### 啟動
+
+```bash
+uv run vcc serve --project-dir . --host 127.0.0.1 --port 8765
+```
+
+在瀏覽器開啟 `http://127.0.0.1:8765`。畫面分三欄：影片庫（搜尋、待清理）、播放與字幕
+（播放器、字幕版本、翻譯、匯出、影片管理）、影片問答；窄視窗或放大 200% 時改為單欄堆疊。
+可查詢單支影片、選畫質／音軌、下載保存與播放，取得平台原文字幕或本機多語辨識、匯入
+UTF-8 SRT／VTT、以選定版本進行 Gemini 翻譯與影片問答，並確認格式與字幕軌後匯出影片。
+
+字幕匯入上限 10 MiB／100,000 cues，同名建立新版本；超出片長最多 1 秒時裁切並顯示
+警告，其餘時間錯誤拒絕。播放、翻譯來源與匯出字幕分開選擇，播放切換不建立工作。
+平台字幕清單失敗可手動重試，不當作無字幕；只有確認無原文字幕才本機辨識。
+
+翻譯缺 `GEMINI_API_KEY` 時停用；每塊 100 cues，成功塊保存，失敗由使用者重試，SDK
+不自動重送。下載、字幕、翻譯、預覽與匯出共用單一媒體 worker 串行執行；問答另有
+獨立 worker。服務重啟不自動恢復工作。
+匯出先以 0.1 秒 stream copy 預檢容器，顯示摘要後固定快照；完整封裝保留影音串流。
+執行時若 MP4 失敗而 MKV 可用，須重新確認 MKV 後建立新工作。來源與字幕保持保存。
+只有 ffprobe 驗證與共同發佈 gate 成功的成品才顯示可下載；另可下載單份 SRT／VTT。
+
+### 相容預覽
+
+來源為 H.264／AAC 時直接播放。其他編碼（如 VP9／Opus、AV1）會顯示「製作相容預覽」：
+按下後才以本機 ffmpeg（libx264／aac）轉成最高 720p、不放大來源、faststart 的 MP4，
+另存於該影片的 `previews/`，絕不覆寫來源或成品，也不當作下載成品。工作可取消
+（終止 ffmpeg）與重試。預覽失敗時字幕、問答與成品下載照常；引用仍顯示原文與時間，
+但無法跳播。
+
+### 資料位置與清理
+
+影片庫預設在 `outputs/library/`（可用 `VCC_LIBRARY_DIR` 或 `--library-dir` 改位置），
+包含 `library.sqlite3` 與 `videos/<受控 ID>/{source,subtitles,previews,exports}`。
+不會自動刪除任何資料：
+
+- 「清除預覽」：只刪除可重建的相容預覽（並取消製作中的預覽），字幕、對話、來源與成品保留；
+  之後需要時按「重新製作預覽」。
+- 「刪除整支影片…」：先列出影音資產、預覽、字幕版本、對話、成品數量與估計大小，勾選確認後
+  才執行。執行時先標記刪除中並取消相關工作，再刪除影片庫內檔案，最後刪除資料列；不跟隨
+  符號連結，不影響影片庫外另存的檔案。中途失敗的影片會從影片庫隱藏並列在「待清理」，
+  按「重試刪除」即可完成；完成後可用同一網址重新匯入。
+
+### 已知限制
+
+- 相容預覽需要本機 ffmpeg 含 libx264；進度只顯示階段，不估百分比。
+- 只以離線 fake 與本機 Chrome（headless）驗證；真實 YouTube、Gemini 模型權限與品質、
+  Safari 實播、VLC 成品切軌與螢幕閱讀器仍需在使用者環境驗收。
+- 刪除時若有無法中斷的工作（例如進行中的雲端翻譯）在 10 秒內未停止，影片會進入「待清理」，
+  稍後重試刪除即可；已送出的雲端請求可能已計費。
+
+### 設定
+
+只有 `serve` 會讀取 `--project-dir` 解析後根目錄中的 `.env`，不搜尋上層或家目錄，也
+不修改程序環境。優先序為「明確非金鑰啟動選項 > 程序環境 > .env > 預設」。
+既有 `probe`／`transcribe`／`report`／`run` 維持原設定契約。
+
+- `GEMINI_API_KEY`：僅後端讀取，`GOOGLE_API_KEY` 不作後備；不接受金鑰 CLI 參數。
+- `VCC_GEMINI_TRANSLATION_MODEL`：預設 `gemini-3.5-flash-lite`。
+- `VCC_GEMINI_QA_MODEL`：預設 `gemini-3.8-flash`。
+- `VCC_LIBRARY_DIR`：預設 `outputs/library/`；相對路徑以專案根目錄為基準。
+- `VCC_HOST`／`VCC_PORT`：預設 `127.0.0.1`／`8765`。
+
+可用 `--library-dir`、`--translation-model`、`--qa-model` 覆寫非金鑰設定。
+修改 `.env` 後需重啟服務；模型帳戶權限尚未實測。服務只綁定 loopback，
+`localhost` 固定綁定 `127.0.0.1`；Host／Origin 使用相同主機與 port，寫入請求必須
+提供同源 Origin。不開放 CORS，不信任代理標頭，停用 access log。
+
+影片庫包含 `library.sqlite3` 與受控 UUID 目錄。升級前保留 DB 備份，重啟將 running
+工作標為 interrupted，不自動重送。回復時停止服務並保留完整影片庫及備份，
+勿將較新 schema 交給舊程式，亦不要刪除影片庫來回復。
+
 ## 命令
 
 以下範例刻意保留中文與空白路徑；程式使用 subprocess argument array，不做 shell 字串插值。

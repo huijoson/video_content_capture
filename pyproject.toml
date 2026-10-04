@@ -38,6 +38,21 @@ dependencies = [
     # SDK's ``ModelParam`` literal. Pin the floor; allow patch upgrades
     # within the verified major.minor for security/bug fixes.
     "anthropic>=0.117.0,<0.118",
+    # Verified installed metadata on 2026-10-04: FastAPI 0.142.2, Uvicorn
+    # 0.53.0 and python-dotenv 1.2.4 require Python >=3.10 and explicitly
+    # classify Python 3.13. Serve uses typed ASGI and non-interpolating dotenv.
+    "fastapi>=0.142.2,<0.143",
+    "uvicorn>=0.53.0,<0.54",
+    "python-dotenv>=1.2.4,<1.3",
+    # Verified official PyPI / installed metadata on 2026-10-04: yt-dlp
+    # 2026.8.19 requires Python >=3.10 and classifies Python 3.13. Its Python
+    # API runs in a cancellable process; source formats are pinned explicitly.
+    "yt-dlp>=2026.8.19,<2027",
+    # Verified official PyPI and installed SDK metadata/source on 2026-10-04:
+    # google-genai 1.75.0 requires Python >=3.10 and classifies Python 3.13.
+    # Explicit api_key, HttpRetryOptions(attempts=1), count_tokens and typed
+    # JSON response schemas are available. No provider calls used for verification.
+    "google-genai>=1.75,<1.76",
 ]
 
 [project.scripts]

@@ -585,5 +585,46 @@ def _run_report_command(
 ProgressCallback = Callable[..., None]
 
 
+@app.command()
+def serve(
+    project_dir: Path = typer.Option(Path("."), help="Project root containing the serve .env."),
+    host: str | None = typer.Option(None, help="Loopback binding (default 127.0.0.1)."),
+    port: int | None = typer.Option(None, help="Local port (default 8765)."),
+    library_dir: Path | None = typer.Option(None, help="Library path relative to project root."),
+    translation_model: str | None = typer.Option(None, help="Gemini translation model ID."),
+    qa_model: str | None = typer.Option(None, help="Gemini Q&A model ID."),
+) -> None:
+    """Start the local YouTube workspace."""
+    import uvicorn
+
+    from video_content_capture.workspace.app import create_app
+    from video_content_capture.workspace.config import load_settings
+
+    try:
+        settings = load_settings(
+            project_dir,
+            host=host,
+            port=port,
+            library_dir=library_dir,
+            translation_model=translation_model,
+            qa_model=qa_model,
+        )
+        application = create_app(settings)
+        uvicorn.run(
+            application,
+            host="127.0.0.1" if settings.host == "localhost" else settings.host,
+            port=settings.port,
+            access_log=False,
+            proxy_headers=False,
+            log_config=None,
+        )
+    except ConfigError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from None
+    except Exception:
+        typer.echo("Workspace startup failed; check library permissions and schema.", err=True)
+        raise typer.Exit(code=1) from None
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

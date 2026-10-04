@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>YouTube 影片工作區</title>
+  <link rel="stylesheet" href="/static/workspace.css">
+  <script src="/static/dialog.js" defer></script>
+  <script src="/static/workspace.js" defer></script>
+  <script src="/static/narrow-tabs.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳到工作區</a>
+  <header class="app-header">
+    <div class="app-bar">
+      <h1>YouTube 影片工作區</h1>
+      <p id="service-status" class="status-line" role="status">正在讀取服務狀態…</p>
+    </div>
+    <p id="gemini-help" class="notice"><span class="icon" aria-hidden="true">ⓘ</span>
+      Gemini 未設定：翻譯與問答需要在專案根目錄 <code>.env</code> 設定
+      <code>GEMINI_API_KEY</code>，儲存後重新啟動服務生效。字幕、播放與匯出不受影響。</p>
+    <form id="import-form" class="import-form">
+      <label for="youtube-url">YouTube 影片網址</label>
+      <div class="url-row">
+        <input id="youtube-url" name="youtube-url" type="url"
+          placeholder="貼上一支影片網址" aria-describedby="import-help" autocomplete="off" required>
+        <button id="load-video" class="primary" type="submit">載入影片</button>
+        <button id="cancel-query" type="button" hidden>取消查詢</button>
+      </div>
+      <p id="import-help" class="hint">每次載入一支影片，查詢後選擇實際畫質與音軌；按開始處理才下載。</p>
+    </form>
+  </header>
+  <main id="workspace" class="workspace" tabindex="-1" data-narrow-tab="subtitles">
+    <section class="pane library" aria-labelledby="library-heading" data-collapsed="false">
+      <div class="pane-header">
+        <h2 id="library-heading">影片庫</h2>
+        <button id="library-toggle" type="button" aria-expanded="true">收合影片庫</button>
+      </div>
+      <label for="library-search">搜尋標題</label>
+      <input id="library-search" type="search" autocomplete="off" aria-describedby="library-status">
+      <p id="library-status" role="status">正在讀取影片庫…</p>
+      <div id="library-empty" class="empty-state" hidden>
+        <p>影片庫目前是空的。</p>
+        <ol>
+          <li>在上方貼上一支 YouTube 影片網址，按「載入影片」。</li>
+          <li>確認畫質與音軌後按「開始處理」。</li>
+          <li>取得或匯入字幕後即可播放、翻譯、匯出與提問。</li>
+        </ol>
+      </div>
+      <ul id="video-list" class="video-list"></ul>
+      <section id="pending-section" class="pending" aria-labelledby="pending-heading" hidden>
+        <h3 id="pending-heading"><span class="icon" aria-hidden="true">⚠</span> 待清理</h3>
+        <p class="hint">刪除未完成的影片已從影片庫隱藏，不能開啟或重新匯入；請按「重試刪除」完成清理。</p>
+        <ul id="pending-deletions"></ul>
+      </section>
+    </section>
+    <section class="pane playback" aria-labelledby="playback-heading">
+      <h2 id="playback-heading">播放與字幕</h2>
+      <p id="import-status" role="status" aria-live="polite">尚未選取影片</p>
+      <div id="video-details" hidden>
+        <div class="video-heading">
+          <h3 id="video-title"></h3>
+          <p id="video-source" class="hint"></p>
+        </div>
+        <div class="field">
+          <label for="media-asset">已保存的影音資產</label>
+          <select id="media-asset" disabled></select>
+        </div>
+        <video id="player" controls preload="metadata" hidden aria-label="影片播放器"></video>
+        <div id="player-placeholder" class="player-empty" hidden>
+          <p id="playback-help"></p>
+        </div>
+        <div id="preview-panel" class="callout" hidden>
+          <p id="preview-status" role="status" aria-live="polite"></p>
+          <button id="make-preview" type="button">製作相容預覽</button>
+        </div>
+        <div id="narrow-tabs" class="narrow-tabs" role="tablist" aria-label="字幕與問答">
+          <button id="tab-subtitles" type="button" role="tab" aria-selected="true"
+            aria-controls="subtitle-panels">字幕</button>
+          <button id="tab-qa" type="button" role="tab" aria-selected="false"
+            aria-controls="qa-pane" tabindex="-1">問答</button>
+        </div>
+        <div id="subtitle-panels">
+        <button id="refresh-source" type="button">重新查詢來源格式</button>
+        <form id="processing-form" class="card">
+          <h3>下載影音</h3>
+          <label for="format">來源畫質</label>
+          <select id="format" aria-describedby="quality-help" required></select>
+          <p id="quality-help" class="hint"></p>
+          <label for="audio">音軌</label>
+          <select id="audio" aria-describedby="audio-help" required></select>
+          <p id="audio-help" class="hint"></p>
+          <p class="hint">預計步驟：下載影音 → 取得字幕／匯入 → 翻譯（需確認）→ 匯出（需確認）</p>
+          <button id="start-job" class="primary" type="submit">開始處理</button>
+        </form>
+        <section class="card" aria-labelledby="subtitles-heading">
+          <h3 id="subtitles-heading">字幕版本</h3>
+          <button id="acquire-subtitles" type="button">取得原文字幕</button>
+          <label for="platform-subtitle">平台字幕（人工／自動）</label>
+          <select id="platform-subtitle"></select>
+          <button id="use-platform-subtitle" type="button">取得所選平台字幕</button>
+          <ul id="subtitle-list" class="subtitle-list"></ul>
+          <form id="subtitle-import-form" class="subform">
+            <h4>匯入字幕</h4>
+            <label for="subtitle-file">匯入 UTF-8 SRT／WebVTT（最多 10 MiB）</label>
+            <input id="subtitle-file" type="file" accept=".srt,.vtt" required>
+            <label for="import-language">字幕語系（例如 zh-TW、en）</label>
+            <input id="import-language" value="zh-TW" maxlength="50" required>
+            <label for="version-name">版本名稱</label>
+            <input id="version-name" maxlength="200" required>
+            <label for="import-parent">父版本（選填）</label>
+            <select id="import-parent"></select>
+            <button id="import-subtitles" type="submit">匯入字幕</button>
+          </form>
+          <div class="subform">
+            <h4>翻譯</h4>
+            <label for="translation-source">翻譯來源</label>
+            <select id="translation-source"></select>
+            <label for="subtitle-language">目標字幕語系</label>
+            <select id="subtitle-language" disabled><option value="zh-TW">繁體中文</option></select>
+            <div class="button-row">
+              <button id="translate" type="button" disabled aria-describedby="gemini-help">翻譯</button>
+              <button id="retranslate" type="button" disabled aria-describedby="gemini-help">重新翻譯（新版本）</button>
+            </div>
+          </div>
+        </section>
+        <section class="card" aria-labelledby="export-heading">
+          <h3 id="export-heading">匯出影片</h3>
+          <label for="export-target">匯出目標字幕版本</label>
+          <select id="export-target"></select>
+          <label class="check"><input id="include-original" type="checkbox" disabled> 附加原文字幕</label>
+          <label for="export-original">原文版本</label>
+          <select id="export-original"></select>
+          <label for="export-container">容器選擇</label>
+          <select id="export-container"><option value="">自動判斷 MP4／MKV</option><option value="mkv">確認 MKV（MP4 失敗時可改選）</option></select>
+          <button id="export-preview" type="button">確認格式與字幕軌</button>
+          <p id="export-summary" role="status" aria-live="polite">先選擇影音與字幕。</p>
+          <button id="export-start" class="primary" type="button" disabled>依此摘要匯出影片</button>
+          <ul id="export-list" class="plain-list"></ul>
+        </section>
+        <section class="card" aria-labelledby="manage-heading">
+          <h3 id="manage-heading">影片管理</h3>
+          <p class="hint">清除預覽只刪除可重建的相容預覽，不動字幕、對話、來源與成品。</p>
+          <button id="clear-preview" type="button" disabled>清除預覽</button>
+          <p class="hint">刪除整支影片會先列出範圍並要求再次確認；影片庫外另存的檔案不受影響。</p>
+          <button id="delete-video" class="danger" type="button">刪除整支影片…</button>
+        </section>
+        </div>
+      </div>
+      <section class="card" aria-labelledby="jobs-heading">
+        <h3 id="jobs-heading">處理工作</h3>
+        <p id="job-status" role="status" aria-live="polite">尚無處理工作</p>
+        <progress id="job-progress" max="1" hidden aria-label="目前階段進度"></progress>
+        <ul id="job-list" class="plain-list"></ul>
+      </section>
+    </section>
+    <section id="qa-pane" class="pane qa" aria-labelledby="qa-heading">
+      <h2 id="qa-heading">影片問答</h2>
+      <p id="qa-source-summary">尚無問答依據。</p>
+      <label for="qa-source">問答依據（完整字幕版本）</label>
+      <select id="qa-source" disabled></select>
+      <button id="qa-new-conversation" type="button" disabled>設為問答依據</button>
+      <p id="qa-no-source" class="notice">取得字幕後可開始問答。
+        <a href="#acquire-subtitles">取得原文字幕</a>／
+        <a href="#subtitle-import-form">匯入字幕</a></p>
+      <label for="conversation-select">已保存的對話</label>
+      <select id="conversation-select" disabled></select>
+      <button id="qa-delete-conversation" type="button" disabled>刪除此串對話</button>
+      <p id="qa-status" role="status" aria-live="polite">尚未選取影片</p>
+      <ol id="qa-messages" aria-label="問答訊息"></ol>
+      <form id="qa-form">
+        <label for="question">問題</label>
+        <textarea id="question" rows="4" disabled aria-describedby="qa-help"></textarea>
+        <p id="qa-help" class="hint">依字幕回答；可在本次問題指定其他回覆語言。
+          Enter 送出，Shift＋Enter 換行。缺少金鑰時，請於專案根目錄
+          <code>.env</code> 設定 <code>GEMINI_API_KEY</code> 並重新啟動服務。</p>
+        <button id="qa-submit" class="primary" type="submit" disabled>送出問題</button>
+      </form>
+    </section>
+  </main>
+  <dialog id="delete-dialog" aria-labelledby="delete-dialog-title" aria-describedby="delete-scope">
+    <h2 id="delete-dialog-title">刪除整支影片</h2>
+    <div id="delete-scope"><p>正在計算刪除範圍…</p></div>
+    <label class="check"><input id="delete-acknowledge" type="checkbox">
+      我了解會永久刪除上列影片庫資料，無法復原</label>
+    <p id="delete-error" class="error-text" role="alert"></p>
+    <div class="button-row dialog-actions">
+      <button id="delete-cancel" type="button">取消</button>
+      <button id="delete-confirm" class="danger" type="button" disabled>永久刪除</button>
+    </div>
+  </dialog>
+  <noscript><p>請啟用 JavaScript 以讀取本機服務狀態與影片庫。</p></noscript>
+</body>
+</html>
