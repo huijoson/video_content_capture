@@ -283,9 +283,22 @@ class FlowService:
             )
         video_id = str(flow["video_id"])
         snapshot = FlowSnapshot.model_validate_json(str(flow["snapshot"]))
-        if job["kind"] == "export":
+        kind = str(job["kind"])
+        if kind == "export":
             return self.library.update_flow(flow_id, status="completed")
-        if job["kind"] == "subtitles":
+        if kind == "translation":
+            translated = json.loads(str(job["snapshot"]))
+            return self._chain(
+                flow_id,
+                "export",
+                self._export_job(
+                    flow,
+                    snapshot,
+                    str(translated["source_version_id"]),
+                    str(translated["target_version_id"]),
+                ),
+            )
+        if kind == "subtitles":
             return self._after_subtitles(flow, snapshot, job)
         asset_id = self._asset_id(video_id, str(job["format_id"]), str(job["audio_id"]))
         return self._chain(flow_id, "subtitles", self.acquisition.create(video_id, asset_id))
@@ -323,20 +336,21 @@ class FlowService:
         return self.library.get_flow(flow_id)
 
     def _acquired_source(self, flow_id: str, snapshot: FlowSnapshot, job: Record) -> str:
-        """Which original the flow translates: frozen at start, else the job's own snapshot."""
+        """Which original the flow translates: frozen at start, else its own acquisition job."""
         if snapshot.source_version_id is not None:
             return snapshot.source_version_id
+        # Match the version this acquisition job published, not the UI's current selection,
+        # so a reselection made while the flow runs cannot change what it translates.
         acquired = json.loads(str(job["snapshot"]))
+        wanted = acquired.get("language")
+        acquired_kind = acquired.get("source_type")
         candidates = [
             version
             for version in self.library.subtitle_versions(str(job["video_id"]))
             if version["complete"]
             and version["source_type"] != "translation"
-            and (acquired.get("language") is None or version["language"] == acquired["language"])
-            and (
-                acquired.get("source_type") is None
-                or version["source_type"] == acquired["source_type"]
-            )
+            and (wanted is None or version["language"] == wanted)
+            and (acquired_kind is None or version["source_type"] == acquired_kind)
         ]
         if candidates:
             return str(candidates[-1]["id"])
