@@ -1,7 +1,9 @@
+import time
 from pathlib import Path
 
 import pytest
 
+from tests.test_workspace_s2_api import setup_queue
 from video_content_capture.workspace.storage import Library
 
 
@@ -199,3 +201,90 @@ def test_retry_does_not_duplicate_another_active_same_selection(tmp_path: Path) 
     library.create_job(str(video["id"]), "v", "a")
     with pytest.raises(ValueError):
         library.retry_job(str(first["id"]))
+
+
+def test_cancelling_a_queued_job_still_fires_the_completion_hook(tmp_path: Path) -> None:
+    """A queued job is dropped from `pending`, so `_worker` never reports it finished.
+
+    Flow chaining hangs off that hook: without it a cancelled stage left the flow
+    `running` forever, which answered every later start with 409 and could not be ended.
+    """
+    library, _, queue, job = setup_queue(tmp_path)
+    finished: list[str] = []
+    queue.on_finished = finished.append
+
+    queue.enqueue(job)
+    assert queue.pending == [str(job["id"])]
+    queue.cancel(str(job["id"]))
+
+    assert finished == [str(job["id"])]
+    assert queue.pending == []
+    assert library.get_job(str(job["id"]))["status"] == "cancelled"
+
+
+def test_cancelling_a_running_job_reports_finish_once(tmp_path: Path) -> None:
+    """The worker owns a job it already took from `pending`; `cancel` must not double-report."""
+    library, _, queue, job = setup_queue(tmp_path)
+    finished: list[str] = []
+    queue.on_finished = finished.append
+
+    queue.enqueue(job)
+    taken = queue.pending.pop(0)  # The worker hands the job to `_worker` before `cancel` sees it.
+    queue.cancel(taken)
+
+    assert finished == []
+    assert library.get_job(taken)["status"] == "cancelled"
+
+
+def test_cleanup_signal_does_not_report_a_finish(tmp_path: Path) -> None:
+    """`signal` stops jobs whose DB status a cleanup transaction already changed.
+
+    Purge and preview-clearing delete the flow rows themselves, so there is nothing left to
+    chain and the hook must stay out of that path.
+    """
+    library, _, queue, job = setup_queue(tmp_path)
+    finished: list[str] = []
+    queue.on_finished = finished.append
+
+    queue.enqueue(job)
+    library.cancel_job(str(job["id"]))
+    queue.signal(str(job["id"]))
+
+    assert finished == []
+    assert queue.pending == []
+
+
+def test_completion_hook_failure_never_stops_the_lane(tmp_path: Path) -> None:
+    """A flow that blows up while chaining must not take the media worker down with it."""
+    library, adapter, queue, job = setup_queue(tmp_path)
+    other = library.import_video(
+        "lmnopqrstuv",
+        "第二部",
+        10,
+        "https://youtu.be/lmnopqrstuv",
+        adapter.source.model_copy(update={"youtube_id": "lmnopqrstuv"}).model_dump_json(),
+    )
+    calls: list[str] = []
+
+    def broken(job_id: str) -> None:
+        calls.append(job_id)
+        raise RuntimeError("chaining exploded")
+
+    queue.on_finished = broken
+    second = library.create_job(str(other["id"]), "v", "a")
+    assert second["id"] != job["id"]
+    queue.enqueue(job)
+    queue.enqueue(second)
+    queue.start()
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and library.get_job(str(second["id"]))["status"] != (
+            "completed"
+        ):
+            time.sleep(0.01)
+    finally:
+        queue.close()
+
+    assert calls == [str(job["id"]), str(second["id"])]
+    assert library.get_job(str(job["id"]))["status"] == "completed"
+    assert library.get_job(str(second["id"]))["status"] == "completed"

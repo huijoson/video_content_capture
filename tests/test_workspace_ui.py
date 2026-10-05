@@ -125,6 +125,12 @@ def test_one_click_flow_confirm_screen_controls() -> None:
     assert 'subtitle_form: element("flow-subtitle-form").value' in script
     # The 「原文＋目標」 control is disabled whenever a translation cannot happen.
     assert "bilingual_allowed" in script
+    # A flow always targets a real language; the backend cannot represent 「不翻譯」,
+    # so the menu must not offer an empty choice the start request would have to fake.
+    assert "不翻譯" not in script
+    assert "不翻譯" not in (STATIC / "index.html").read_text()
+    assert 'target_language: element("flow-language").value,' in script
+    assert "flowConfirm?.original_language" not in script
     # Progress and the finished artifact come from the flow status surface.
     assert "flow-artifact" in script and "下載影片" in script
     assert "/api/exports/${controlled(payload.artifact.id)}/download" in script

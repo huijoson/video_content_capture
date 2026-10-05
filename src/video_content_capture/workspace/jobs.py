@@ -138,10 +138,16 @@ class MediaQueue:
     def cancel(self, job_id: str) -> None:
         self.library.cancel_job(job_id)
         with self.condition:
-            if job_id in self.pending:
+            queued = job_id in self.pending
+            if queued:
                 self.pending.remove(job_id)
             if job_id in self.active:
                 self.active[job_id].set()
+        # A job cancelled while still queued never reaches the worker, so the completion
+        # hook in `_worker` would never run for it. Flow chaining depends on that hook to
+        # end the flow when a stage does not complete, so fire it here instead.
+        if queued:
+            self._finished(job_id)
 
     def signal(self, job_id: str) -> None:
         """Stop a job whose DB status was already changed by a cleanup transaction."""
@@ -170,15 +176,19 @@ class MediaQueue:
             try:
                 self.process(job_id, event)
             finally:
-                # The completion hook chains the next flow stage; it must never stop the lane.
-                if self.on_finished is not None:
-                    try:
-                        self.on_finished(job_id)
-                    except Exception:
-                        logger.exception("Job completion hook failed job=%s", job_id)
+                self._finished(job_id)
                 with self.condition:
                     self.active.pop(job_id, None)
                     self.condition.notify_all()
+
+    def _finished(self, job_id: str) -> None:
+        # The completion hook chains the next flow stage; it must never stop the lane.
+        if self.on_finished is None:
+            return
+        try:
+            self.on_finished(job_id)
+        except Exception:
+            logger.exception("Job completion hook failed job=%s", job_id)
 
     def process(self, job_id: str, cancel: threading.Event) -> None:
         try:

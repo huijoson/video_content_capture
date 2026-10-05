@@ -277,6 +277,9 @@ class FlowService:
         if flow["status"] != "running" or str(flow["stage"]) != str(job["kind"]):
             return flow
         status = str(job["status"])
+        if status == "cancelled":
+            # The user cancelled this stage from the job list; that ends the whole flow.
+            return self.library.update_flow(flow_id, status="cancelled", error="cancelled")
         if status != "completed":
             return self.library.update_flow(
                 flow_id, status="failed", error=str(job["error_code"] or status)

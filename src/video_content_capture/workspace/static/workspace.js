@@ -68,8 +68,9 @@ let flowStatus = null;
 let flowConfirming = false;
 // Subtitle form used to resolve the source version for a download; matches today's export.
 const downloadSubtitleForm = "tracks";
+// A flow always translates to a real target language; the backend has no way to ask
+// for "translate nothing", so the menu never offers an empty choice to fake.
 const flowLanguageOptions = [
-  { id: "", label: "不翻譯（只處理原文字幕）" },
   { id: "zh-TW", label: "繁體中文（zh-TW）" },
   { id: "zh-CN", label: "简体中文（zh-CN）" },
   { id: "en", label: "英文（en）" },
@@ -224,7 +225,7 @@ function renderVideo(video, preserveSelection = false) {
   const sameVideo = currentVideo?.id === video.id;
   const selectedHeight = preserveSelection && sameVideo ? Number(element("resolution").value) : null;
   currentVideo = video;
-  if (!sameVideo) { element("include-original").checked = false; element("export-container").value = ""; element("export-form").value = "burned"; element("subtitle-language").value = "zh-TW"; element("flow-include-original").checked = false; element("flow-subtitle-form").value = "burned"; flowId = null; flowStatus = null; }
+  if (!sameVideo) { element("include-original").checked = false; element("export-container").value = ""; element("export-form").value = "burned"; element("subtitle-language").value = "zh-TW"; element("flow-include-original").checked = false; element("flow-subtitle-form").value = "burned"; element("flow-language").value = "zh-TW"; flowId = null; flowStatus = null; }
   options(element("flow-language"), flowLanguageOptions, element("flow-language").value, (entry) => entry.label);
   element("video-details").hidden = false;
   element("video-title").textContent = video.title;
@@ -650,7 +651,7 @@ element("processing-form").addEventListener("submit", async (event) => {
   try {
     const started = await request(`/api/videos/${controlled(currentVideo.id)}/flows`, "POST", {
       height: Number(element("resolution").value),
-      target_language: element("flow-language").value || flowConfirm?.original_language || "zh-TW",
+      target_language: element("flow-language").value,
       include_original: element("flow-include-original").checked,
       subtitle_form: element("flow-subtitle-form").value,
     });

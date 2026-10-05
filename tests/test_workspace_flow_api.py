@@ -83,6 +83,23 @@ class BlockingAdapter(FlowAdapter):
         return super().download(source, format_id, audio_id, directory, cancel, progress, stages)
 
 
+class HoldingAdapter(FlowAdapter):
+    """Blocks the first download only, so an unrelated job can park in the lane."""
+
+    def __init__(self, language: str = "en") -> None:
+        super().__init__(language)
+        self.entered, self.release = Event(), Event()
+        self.hold = True
+
+    def download(self, source, format_id, audio_id, directory, cancel, progress, stages=None):
+        if self.hold:
+            self.hold = False
+            progress("downloading", 1, 2)
+            self.entered.set()
+            assert self.release.wait(5)
+        return super().download(source, format_id, audio_id, directory, cancel, progress, stages)
+
+
 class FakeTranslation:
     def translate(
         self, key: SecretStr, model: str, language: str, cues: list[Cue]
@@ -460,3 +477,71 @@ def test_flow_reclaims_a_queued_download_left_unlinked_by_a_crash(tmp_path: Path
         status = wait_for_flow(client, flow_id)
         assert {stage["status"] for stage in status["stages"]} == {"completed"}
         assert confirm(client, video["id"], target_language="en").json()["busy"] is False
+
+
+def test_cancelling_a_queued_stage_ends_the_flow_instead_of_wedging_it(tmp_path: Path) -> None:
+    """A stage cancelled while still queued never reaches the worker.
+
+    `MediaQueue.cancel` drops it from `pending`, so `_worker` never reports it finished and
+    the flow stayed `running` forever: `confirm` said busy, every later start was answered
+    with 409, and no endpoint could end it. Cancelling the stage has to end the flow.
+    """
+    adapter = HoldingAdapter()
+    library = Library(tmp_path / "library")
+    library.initialize()
+    settings = replace(load_settings(tmp_path), library_dir=library.root)
+    with TestClient(
+        create_app(
+            settings,
+            adapter,
+            asr_adapter=FakeASR(),
+            media_exporter=MediaExporter(FakeFFmpeg()),
+        ),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        # An unrelated download holds the lane, so the flow's first stage stays `queued`.
+        other = library.import_video(
+            "lmnopqrstuv",
+            "第二部",
+            10,
+            "https://youtu.be/lmnopqrstuv",
+            adapter.source.model_copy(update={"youtube_id": "lmnopqrstuv"}).model_dump_json(),
+        )
+        blocking = client.post(
+            f"/api/videos/{other['id']}/jobs",
+            json={"format_id": "v", "audio_id": "a"},
+            headers=ORIGIN,
+        ).json()
+        assert adapter.entered.wait(5)
+        try:
+            started = start_flow(client, video["id"], "en")
+            assert started.status_code == 200, started.text
+            flow_id = started.json()["flow"]["id"]
+            stage = started.json()["job"]
+            assert stage["id"] != blocking["id"] and stage["status"] == "queued"
+            assert confirm(client, video["id"], target_language="en").json()["busy"] is True
+
+            cancelled = client.post(f"/api/jobs/{stage['id']}/cancel", headers=ORIGIN)
+            assert cancelled.status_code == 200, cancelled.text
+            assert cancelled.json()["status"] == "cancelled"
+
+            flow = client.get(f"/api/flows/{flow_id}").json()
+            assert flow["flow"]["status"] == "cancelled", flow
+            assert flow["flow"]["error_code"] == "cancelled"
+            assert [step["stage"] for step in flow["stages"]] == ["download", "subtitles", "export"]
+            assert [step["status"] for step in flow["stages"]] == [
+                "cancelled",
+                "pending",
+                "pending",
+            ]
+            assert library.active_flow(video["id"]) is None
+            assert confirm(client, video["id"], target_language="en").json()["busy"] is False
+
+            restarted = start_flow(client, video["id"], "en")
+            assert restarted.status_code == 200, restarted.text
+            assert restarted.json()["flow"]["id"] != flow_id
+        finally:
+            adapter.release.set()
