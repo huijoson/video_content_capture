@@ -61,8 +61,25 @@ let playbackVideoId = null;
 let geminiConfigured = false;
 let exportSnapshot = null;
 let exportGeneration = 0;
+let flowConfirm = null;
+let flowConfirmVideoId = null;
+let flowId = null;
+let flowStatus = null;
+let flowConfirming = false;
 // Subtitle form used to resolve the source version for a download; matches today's export.
 const downloadSubtitleForm = "tracks";
+// A flow always translates to a real target language; the backend has no way to ask
+// for "translate nothing", so the menu never offers an empty choice to fake.
+const flowLanguageOptions = [
+  { id: "zh-TW", label: "繁體中文（zh-TW）" },
+  { id: "zh-CN", label: "简体中文（zh-CN）" },
+  { id: "en", label: "英文（en）" },
+  { id: "ja", label: "日文（ja）" },
+  { id: "ko", label: "韓文（ko）" },
+];
+const flowStepLabels = {
+  download: "下載影音", subtitles: "取得字幕／匯入", translation: "翻譯", export: "匯出",
+};
 const codecLabels = { h264: "H.264", aac: "AAC", vp9: "VP9", av1: "AV1", opus: "Opus" };
 let currentConversation = null;
 let qaGeneration = 0;
@@ -208,7 +225,8 @@ function renderVideo(video, preserveSelection = false) {
   const sameVideo = currentVideo?.id === video.id;
   const selectedHeight = preserveSelection && sameVideo ? Number(element("resolution").value) : null;
   currentVideo = video;
-  if (!sameVideo) { element("include-original").checked = false; element("export-container").value = ""; element("export-form").value = "burned"; element("subtitle-language").value = "zh-TW"; }
+  if (!sameVideo) { element("include-original").checked = false; element("export-container").value = ""; element("export-form").value = "burned"; element("subtitle-language").value = "zh-TW"; element("flow-include-original").checked = false; element("flow-subtitle-form").value = "burned"; element("flow-language").value = "zh-TW"; flowId = null; flowStatus = null; }
+  options(element("flow-language"), flowLanguageOptions, element("flow-language").value, (entry) => entry.label);
   element("video-details").hidden = false;
   element("video-title").textContent = video.title;
   element("video-source").textContent = `時長：${video.duration == null ? "未知" : `${Math.round(video.duration)} 秒`} · YouTube`;
@@ -349,11 +367,119 @@ async function openVideo(id) {
   renderVideo(video);
   element("import-status").textContent = "已開啟影片；開啟不會自動建立下載工作。";
   renderJobs();
+  await refreshFlow().catch(() => {});
 }
 
 function updateStartButton() {
-  element("start-job").disabled = !currentVideo || !element("resolution").value ||
+  const blocked = flowConfirmVideoId === currentVideo?.id && flowConfirm?.blocked_reason;
+  const busy = flowConfirmVideoId === currentVideo?.id && flowConfirm?.busy;
+  element("start-job").disabled = !currentVideo || !element("resolution").value || flowConfirming ||
+    Boolean(blocked) || Boolean(busy) ||
     jobs.some((job) => job.video_id === currentVideo.id && activeStatuses.has(job.status));
+}
+
+async function requestFlowConfirm() {
+  if (!currentVideo) { flowConfirm = null; flowConfirmVideoId = null; return; }
+  const params = { height: Number(element("resolution").value) };
+  const target = element("flow-language").value;
+  if (target) params.target_language = target;
+  const query = new URLSearchParams(params);
+  flowConfirm = await request(`/api/videos/${controlled(currentVideo.id)}/flow?${query}`);
+  flowConfirmVideoId = currentVideo.id;
+}
+
+function renderFlowFacts() {
+  const facts = element("flow-facts");
+  facts.replaceChildren();
+  if (!flowConfirm || flowConfirmVideoId !== currentVideo?.id) return;
+  const form = element("flow-subtitle-form").value;
+  const entries = [
+    `標題：${flowConfirm.title}`,
+    `時長：${flowConfirm.duration == null ? "未知" : `${Math.round(flowConfirm.duration)} 秒`}`,
+    `原文字幕來源：${flowConfirm.original_source_label}`,
+    `音軌（自動選擇）：${flowConfirm.audio?.language || "未知"} · ${codecLabels[flowConfirm.audio?.codec] || flowConfirm.audio?.codec || "未知"}`,
+    `輸出格式：${(flowConfirm.subtitle_forms?.[form] || flowConfirm.output_format).toUpperCase()}`,
+    `預計步驟：${flowConfirm.steps.map((step) => flowStepLabels[step] || step).join(" → ")}`,
+  ];
+  for (const text of entries) {
+    const item = document.createElement("li");
+    item.textContent = text;
+    facts.append(item);
+  }
+}
+
+function renderFlow() {
+  const selected = currentVideo && flowConfirmVideoId === currentVideo.id;
+  const language = selected ? flowConfirm : null;
+  element("flow-summary").textContent = !currentVideo
+    ? "尚未選取影片。"
+    : selected
+      ? `開始後即固定以下選擇；之後的介面改選不影響進行中的流程。${language.busy ? "此影片已有一鍵流程正在進行。" : ""}`
+      : "正在讀取確認內容…";
+  const blocked = element("flow-blocked");
+  blocked.hidden = !selected || !language.blocked_reason;
+  blocked.textContent = language?.blocked_reason
+    ? `需要翻譯但尚未設定 Gemini 金鑰：${flowsBlockedMessage(language.blocked_reason)}`
+    : "";
+  // 「原文＋目標」 needs a target language and an actual translation to mean anything.
+  const hasTarget = Boolean(element("flow-language").value);
+  element("flow-include-original").disabled = !selected || !hasTarget || language.bilingual_allowed === false;
+  if (!hasTarget || language?.bilingual_allowed === false) element("flow-include-original").checked = false;
+  renderFlowFacts();
+  renderFlowStatus();
+  updateStartButton();
+}
+
+function flowsBlockedMessage(code) {
+  return code === "missing_gemini_key"
+    ? "請在專案 .env 設定 GEMINI_API_KEY 並重啟服務。"
+    : "請先完成設定。";
+}
+
+function renderFlowStatus() {
+  const stages = element("flow-stages");
+  stages.replaceChildren();
+  const payload = flowStatus;
+  element("flow-status").textContent = !payload
+    ? "尚未開始一鍵流程。"
+    : `流程 ${statusLabels[payload.flow.status] || payload.flow.status} · ${payload.stages.filter((stage) => stage.status === "completed").length}/${payload.stages.length} 階段完成`;
+  if (payload) {
+    for (const stage of payload.stages) {
+      const item = document.createElement("li");
+      const label = flowStepLabels[stage.stage] || stage.stage;
+      const percent = stage.progress == null ? "" : ` · ${Math.round(stage.progress * 100)}%`;
+      item.textContent = `${statusLabels[stage.status] ? statusIcons[stage.status] : statusIcons.info} ${label}：${statusLabels[stage.status] || stage.status}${percent}${stage.error_code ? ` · ${jobErrorLabel(stage.error_code)}` : ""}`;
+      stages.append(item);
+    }
+  }
+  const artifact = element("flow-artifact");
+  artifact.replaceChildren();
+  if (payload?.artifact) {
+    const link = document.createElement("a");
+    link.href = `/api/exports/${controlled(payload.artifact.id)}/download`;
+    link.textContent = "下載影片";
+    link.setAttribute("download", "");
+    const label = document.createElement("span");
+    label.textContent = `已完成：${payload.artifact.summary ? "成品就緒" : ""} `;
+    artifact.append(label, link);
+  }
+}
+
+async function refreshFlow() {
+  if (!currentVideo) { flowConfirm = null; flowConfirmVideoId = null; flowStatus = null; flowId = null; renderFlow(); return; }
+  flowConfirming = true;
+  try {
+    await requestFlowConfirm();
+    if (flowId) flowStatus = await request(`/api/flows/${controlled(flowId)}`);
+    else flowStatus = null;
+  } catch (error) {
+    flowConfirm = null; flowConfirmVideoId = null; flowStatus = null;
+    element("flow-summary").textContent = "確認內容暫時無法讀取，請稍後再試。";
+    throw error;
+  } finally {
+    flowConfirming = false;
+  }
+  renderFlow();
 }
 
 function renderJobs() {
@@ -424,6 +550,10 @@ async function savePosition(force = false) {
   } finally { savingPosition = false; }
 }
 
+for (const id of ["resolution", "flow-language", "flow-subtitle-form"]) {
+  element(id).addEventListener("change", () => { refreshFlow().catch(showError); });
+}
+element("flow-include-original").addEventListener("change", () => { renderFlow(); });
 element("resolution").addEventListener("change", renderResolvedSource);
 element("media-asset").addEventListener("change", async () => {
   if (!currentVideo) return;
@@ -519,15 +649,24 @@ element("processing-form").addEventListener("submit", async (event) => {
   if (element("start-job").disabled || !currentVideo) return;
   element("start-job").disabled = true;
   try {
-    await request(`/api/videos/${controlled(currentVideo.id)}/jobs`, "POST", {
-      height: Number(element("resolution").value), subtitle_form: downloadSubtitleForm,
+    const started = await request(`/api/videos/${controlled(currentVideo.id)}/flows`, "POST", {
+      height: Number(element("resolution").value),
+      target_language: element("flow-language").value,
+      include_original: element("flow-include-original").checked,
+      subtitle_form: element("flow-subtitle-form").value,
     });
+    flowId = started.flow.id;
+    flowStatus = started;
+    renderFlow();
     await pollJobs();
   } catch (error) { showError(error); updateStartButton(); }
 });
 
 async function refresh() {
-  try { await pollJobs(); await pollConversation(); }
+  try {
+    await pollJobs(); await pollConversation();
+    if (currentVideo && !flowConfirming) await refreshFlow().catch(() => {});
+  }
   catch { element("job-status").textContent = "工作狀態暫時無法更新，請確認本機服務仍在執行。"; }
   setTimeout(refresh, 1500);
 }
@@ -1070,7 +1209,12 @@ function forgetVideo(videoId) {
   ++qaGeneration;
   currentVideo = null;
   deletionScope = null;
+  flowId = null;
+  flowStatus = null;
+  flowConfirm = null;
+  flowConfirmVideoId = null;
   stopPlayer("");
+  renderFlow();
   element("video-details").hidden = true;
   currentConversation = null;
   qaMessageSignature = "";

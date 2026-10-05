@@ -93,3 +93,44 @@ def test_s3_subtitles_translation_and_confirmed_export_controls() -> None:
     assert '"export-selection"' in script
     assert "/exports/preview" in script
     assert "innerHTML" not in script
+
+
+def test_one_click_flow_confirm_screen_controls() -> None:
+    page = Elements()
+    page.feed((STATIC / "index.html").read_text())
+    for element_id in (
+        "flow-summary",
+        "flow-language",
+        "flow-include-original",
+        "flow-subtitle-form",
+        "flow-facts",
+        "flow-status",
+        "flow-stages",
+        "flow-artifact",
+    ):
+        assert element_id in page.by_id
+    assert page.by_id["flow-language"]["tag"] == "select"
+    assert page.by_id["flow-subtitle-form"]["tag"] == "select"
+    assert page.by_id["flow-include-original"]["tag"] == "input"
+    assert page.by_id["flow-status"]["aria-live"] == "polite"
+    assert page.by_id["flow-blocked"]["aria-live"] == "polite"
+    # The flow summary and the read-only facts are announced without stealing focus.
+    assert page.by_id["flow-facts"]["tag"] == "ul"
+    # The one-click flow burns subtitles by default (ADR 0004).
+    script = (STATIC / "workspace.js").read_text()
+    assert 'value="burned" selected' in (STATIC / "index.html").read_text()
+    # The confirm screen is fed by the read-only flow endpoint and the frozen start endpoint.
+    assert "/flow?" in script and "/flows" in script
+    # The chosen subtitle form is sent as-is; the download helper stays for plain downloads.
+    assert 'subtitle_form: element("flow-subtitle-form").value' in script
+    # The 「原文＋目標」 control is disabled whenever a translation cannot happen.
+    assert "bilingual_allowed" in script
+    # A flow always targets a real language; the backend cannot represent 「不翻譯」,
+    # so the menu must not offer an empty choice the start request would have to fake.
+    assert "不翻譯" not in script
+    assert "不翻譯" not in (STATIC / "index.html").read_text()
+    assert 'target_language: element("flow-language").value,' in script
+    assert "flowConfirm?.original_language" not in script
+    # Progress and the finished artifact come from the flow status surface.
+    assert "flow-artifact" in script and "下載影片" in script
+    assert "/api/exports/${controlled(payload.artifact.id)}/download" in script

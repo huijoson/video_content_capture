@@ -227,3 +227,50 @@ def test_v1_upgrade_preserves_records_and_backs_up(tmp_path: Path) -> None:
     with sqlite3.connect(library.db_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert connection.execute("SELECT count(*) FROM media_assets").fetchone()[0] == 0
+
+
+def test_migration_adds_flow_tracking_to_existing_database(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library")
+    library.initialize()
+    video_id = str(library.import_video("abcdefghijk", "old", 10, "url", "{}")["id"])
+    with sqlite3.connect(library.db_path) as connection:
+        connection.execute("DROP INDEX flows_one_running")
+        connection.execute("DROP TABLE flows")
+        connection.execute("ALTER TABLE jobs DROP COLUMN flow_id")
+        connection.execute("PRAGMA user_version = 6")
+    upgraded = Library(library.root)
+    upgraded.initialize()
+    with sqlite3.connect(upgraded.db_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert "flow_id" in {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+        assert connection.execute("SELECT count(*) FROM flows").fetchone()[0] == 0
+    flow = upgraded.create_flow(video_id, "download", {"height": 720})
+    assert flow["status"] == "running" and flow["stage"] == "download"
+    assert upgraded.get_flow(str(flow["id"]))["snapshot"] == '{"height": 720}'
+
+
+def test_flow_lifecycle_is_frozen_singular_and_interrupted_on_restart(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library")
+    library.initialize()
+    video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
+    flow = library.create_flow(video_id, "download", {"height": 1080, "target_language": "zh-TW"})
+    with pytest.raises(ValueError):
+        library.create_flow(video_id, "download", {"height": 720})
+    assert [row["id"] for row in library.flows(video_id)] == [flow["id"]]
+    assert str(library.active_flow(video_id)["id"]) == flow["id"]  # type: ignore[index]
+    assert library.flow_jobs(str(flow["id"])) == []
+    job = library.create_job(video_id, "v", "a", str(flow["id"]))
+    assert [row["id"] for row in library.flow_jobs(str(flow["id"]))] == [job["id"]]
+    advanced = library.update_flow(str(flow["id"]), stage="export")
+    assert advanced["stage"] == "export" and advanced["status"] == "running"
+    failed = library.update_flow(str(flow["id"]), status="failed", error="media_failed")
+    assert failed["status"] == "failed" and failed["error_code"] == "media_failed"
+    assert library.active_flow(video_id) is None
+    # A finished flow never blocks a new one, and restart interrupts only running flows.
+    second = library.create_flow(video_id, "subtitles", {"language": None})
+    library.interrupt_running()
+    assert library.get_flow(str(second["id"]))["status"] == "interrupted"
+    library.mark_deleting(video_id)
+    library.purge_video(video_id)
+    with sqlite3.connect(library.db_path) as connection:
+        assert connection.execute("SELECT count(*) FROM flows").fetchone()[0] == 0
