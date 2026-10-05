@@ -2,6 +2,12 @@
 
 const element = (id) => document.getElementById(id);
 const controlled = (id) => encodeURIComponent(id);
+// Names for the languages the menus list first; anything else falls back to its own tag.
+const languageNames = {
+  "zh-TW": "繁體中文", "zh-CN": "简体中文", en: "英文", ja: "日文", ko: "韓文",
+  es: "西班牙文", fr: "法文", de: "德文",
+};
+const languageLabel = (id) => (languageNames[id] ? `${languageNames[id]}（${id}）` : id);
 const activeStatuses = new Set(["queued", "running"]);
 const statusLabels = {
   queued: "排隊中", running: "處理中", completed: "已完成", failed: "失敗",
@@ -68,15 +74,21 @@ let flowStatus = null;
 let flowConfirming = false;
 // Subtitle form used to resolve the source version for a download; matches today's export.
 const downloadSubtitleForm = "tracks";
-// A flow always translates to a real target language; the backend has no way to ask
-// for "translate nothing", so the menu never offers an empty choice to fake.
-const flowLanguageOptions = [
-  { id: "zh-TW", label: "繁體中文（zh-TW）" },
-  { id: "zh-CN", label: "简体中文（zh-CN）" },
-  { id: "en", label: "英文（en）" },
-  { id: "ja", label: "日文（ja）" },
-  { id: "ko", label: "韓文（ko）" },
-];
+// Languages the flow may target: the first batch, then anything the source already
+// carries, so a target can be picked without typing a tag. The backend accepts any
+// valid tag, so this menu is the only limit.
+const flowTargetLanguages = ["zh-TW", "zh-CN", "en", "ja", "ko", "es", "fr", "de"];
+function flowLanguageChoices(video) {
+  const metadata = video.metadata || {};
+  const provided = [
+    ...(video.subtitles || []).map((version) => version.language),
+    ...(metadata.subtitles || []).map((track) => track.language),
+    metadata.original_language,
+  ].filter(Boolean);
+  return [...new Set([...flowTargetLanguages, ...provided])].map((id) => ({
+    id, label: languageLabel(id),
+  }));
+}
 const flowStepLabels = {
   download: "下載影音", subtitles: "取得字幕／匯入", translation: "翻譯", export: "匯出",
 };
@@ -226,7 +238,7 @@ function renderVideo(video, preserveSelection = false) {
   const selectedHeight = preserveSelection && sameVideo ? Number(element("resolution").value) : null;
   currentVideo = video;
   if (!sameVideo) { element("include-original").checked = false; element("export-container").value = ""; element("export-form").value = "burned"; element("subtitle-language").value = "zh-TW"; element("flow-include-original").checked = false; element("flow-subtitle-form").value = "burned"; element("flow-language").value = "zh-TW"; flowId = null; flowStatus = null; }
-  options(element("flow-language"), flowLanguageOptions, element("flow-language").value, (entry) => entry.label);
+  options(element("flow-language"), flowLanguageChoices(video), element("flow-language").value, (entry) => entry.label);
   element("video-details").hidden = false;
   element("video-title").textContent = video.title;
   element("video-source").textContent = `時長：${video.duration == null ? "未知" : `${Math.round(video.duration)} 秒`} · YouTube`;
@@ -774,7 +786,7 @@ function renderSubtitles(video, preserveSelection = false) {
     }
     element("subtitle-list").append(item);
   }
-  const languages = [...new Set(["zh-TW", "zh-CN", "en", "ja", "ko", "es", "fr", "de", ...versions.map((v) => v.language), ...(video.metadata?.subtitles || []).map((v) => v.language), ...[video.metadata?.original_language].filter(Boolean)])];
+  const languages = flowLanguageChoices(video).map((choice) => choice.id);
   const selected = element("subtitle-language").value || "zh-TW";
   options(element("subtitle-language"), languages.map((id) => ({ id })), selected, (v) => v.id);
   element("subtitle-language").disabled = false;

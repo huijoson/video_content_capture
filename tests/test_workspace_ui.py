@@ -131,6 +131,13 @@ def test_one_click_flow_confirm_screen_controls() -> None:
     assert "不翻譯" not in (STATIC / "index.html").read_text()
     assert 'target_language: element("flow-language").value,' in script
     assert "flowConfirm?.original_language" not in script
+    # The target menu offers the documented first batch and everything the source already
+    # carries; the backend accepts any valid tag, so this menu is the only limit.
+    for language in ('"zh-TW"', '"zh-CN"', '"en"', '"ja"', '"ko"', '"es"', '"fr"', '"de"'):
+        assert language in script
+    assert 'options(element("flow-language"), flowLanguageChoices(video)' in script
+    # The translation panel and the flow menu share one list, so they cannot drift apart.
+    assert script.count("flowLanguageChoices(") >= 3
     # Progress and the finished artifact come from the flow status surface.
     assert "flow-artifact" in script and "下載影片" in script
     assert "/api/exports/${controlled(payload.artifact.id)}/download" in script
