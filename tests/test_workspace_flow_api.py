@@ -774,3 +774,28 @@ def test_restart_marks_the_flow_interrupted_and_lets_the_ui_retry_it(tmp_path: P
         assert resumed.status_code == 200, resumed.text
         finished = wait_for_flow(client, flow_id)
         assert {stage["status"] for stage in finished["stages"]} == {"completed"}
+
+
+def test_cancelling_a_flow_stops_its_running_ffmpeg_child(tmp_path: Path) -> None:
+    """The flow-level cancel must reach the running export, not only its database row."""
+    runner = FakeFFmpeg()
+    adapter = FlowAdapter("en")
+    client, library = make_flow_client(tmp_path, adapter, runner)
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        # `FakeFFmpeg.block` only arms the real burn: the export chaining probe always runs
+        # ffmpeg with `-t 0.1`, and that path never blocks.
+        runner.block = True
+        started = start_flow(client, video["id"], "en")
+        assert started.status_code == 200, started.text
+        flow_id = _flow_id(library, started.json()["flow"]["id"])
+        assert runner.entered.wait(5), "the export stage never reached ffmpeg"
+
+        cancelled = client.post(f"/api/flows/{flow_id}/cancel", headers=ORIGIN)
+        assert cancelled.status_code == 200, cancelled.text
+        assert runner.cancelled.wait(5), "the flow cancel never reached the ffmpeg child"
+        status = wait_for_flow(client, flow_id, expect="cancelled")
+        assert status["flow"]["error_code"] == "cancelled"
+        assert status["stages"][-1]["status"] == "cancelled"
