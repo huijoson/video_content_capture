@@ -295,8 +295,10 @@ class FlowService:
     def cancel(self, flow_id: str) -> Record:
         """End a running flow and terminate the child process of its current stage.
 
-        Cancelling the stage job is enough: `MediaQueue.cancel` signals a running attempt
-        and finishes a queued one itself, and `advance` turns that into a cancelled flow.
+        `MediaQueue.cancel` signals a running attempt and finishes a queued one itself, and
+        either way `advance` turns the cancelled stage into a cancelled flow. That cascade
+        runs on the worker thread, so the flow is ended here as well to make the answer
+        deterministic.
         """
         flow = self.library.get_flow(flow_id)
         if flow["status"] != "running":
@@ -306,9 +308,17 @@ class FlowService:
             if self.cancel_job is None:
                 # Without the queue hook a "cancelled" flow could leave ffmpeg running.
                 raise FlowError(FLOW_UNBOUND_MESSAGE)
-            self.cancel_job(str(job["id"]))
-        else:
-            # Nothing queued or running: the stage never produced work to cancel.
+            try:
+                self.cancel_job(str(job["id"]))
+            except ValueError:
+                # The stage finished between the read above and the cancel, so there is no
+                # process left to terminate; fall through and end the flow here instead.
+                pass
+        # The worker turns a cancelled stage into a cancelled flow, but it does so on its own
+        # thread. Ending the flow here as well makes the answer deterministic and keeps a dead
+        # worker from leaving a `running` flow that blocks every later start. When the worker
+        # gets there first this is a no-op: `update_flow` only writes `running` rows.
+        if self.library.get_flow(flow_id)["status"] == "running":
             self.library.update_flow(flow_id, status="cancelled", error="cancelled")
         return self.status(flow_id)
 

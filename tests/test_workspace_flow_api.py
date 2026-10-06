@@ -799,3 +799,30 @@ def test_cancelling_a_flow_stops_its_running_ffmpeg_child(tmp_path: Path) -> Non
         status = wait_for_flow(client, flow_id, expect="cancelled")
         assert status["flow"]["error_code"] == "cancelled"
         assert status["stages"][-1]["status"] == "cancelled"
+
+
+def test_cancelling_a_running_stage_ends_the_flow_before_the_answer(tmp_path: Path) -> None:
+    """The worker ends the flow on its own thread; the response must not race it.
+
+    Cancelling a *running* stage used to return the flow still `running` — the cascade
+    through `advance()` had not run yet — and a stage that finished in that window made
+    `Library.cancel_job` raise, which surfaced as a bogus 404 「流程不存在」.
+    """
+    adapter = BlockingAdapter()
+    client, library = make_flow_client(tmp_path, adapter, FakeFFmpeg())
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        started = start_flow(client, video["id"], "en")
+        flow_id = _flow_id(library, started.json()["flow"]["id"])
+        assert adapter.entered.wait(5)
+
+        cancelled = client.post(f"/api/flows/{flow_id}/cancel", headers=ORIGIN)
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["flow"]["status"] == "cancelled"
+        assert cancelled.json()["flow"]["error_code"] == "cancelled"
+        assert [stage["status"] for stage in cancelled.json()["stages"]][0] == "cancelled"
+        assert client.get(f"/api/flows/{flow_id}").json()["flow"]["status"] == "cancelled"
+        adapter.release.set()
+        assert confirm(client, video["id"], target_language="en").json()["busy"] is False

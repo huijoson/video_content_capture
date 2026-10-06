@@ -17,7 +17,7 @@
 - `static/workspace.js` must not use `innerHTML`; build nodes with `document.createElement` and set `textContent` (asserted by `tests/test_workspace_ui.py`).
 - All state changes stay inside `Library`; services call library methods rather than issuing SQL.
 - Writes that can race a worker use `BEGIN IMMEDIATE`.
-- Quality gates after every task: `ruff check .`, `ruff format --check .`, `mypy`, `pytest`.
+- Quality gates after every task: `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src`, `uv run pytest -q`. Bare `mypy` fails on this repo (editable install, no `py.typed`); `mypy src` is the gate the project already uses.
 - The flow status payload shape (`{flow, snapshot, stages, artifact}`) is a contract with `workspace.js`; only `confirm()` gains a key, and only `latest_flow_id`.
 - `FlowService` never imports `MediaQueue`; collaborators are injected through `bind`/`bind_cancel`.
 
@@ -184,7 +184,7 @@ Expected: PASS (all tests in the file, including the pre-existing flow lifecycle
 - [ ] **Step 5: Run the four gates**
 
 ```bash
-ruff check . && ruff format --check . && mypy && pytest -q
+uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q
 ```
 Expected: all clean; `pytest` reports 695 passed (692 baseline + 3 new).
 
@@ -683,10 +683,10 @@ Expected: PASS for the new tests and all pre-existing ones.
 - [ ] **Step 9: Run the four gates**
 
 ```bash
-ruff check . && ruff format --check . && mypy && pytest -q
+uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q
 ```
 
-Expected: all clean; `pytest` reports 699 passed (692 baseline + 3 storage + 4 flow API).
+Expected: all clean; `pytest` reports 700 passed (692 baseline + 3 storage + 5 flow API).
 
 - [ ] **Step 10: Commit**
 
@@ -847,7 +847,7 @@ Expected: PASS.
 - [ ] **Step 7: Run the four gates**
 
 ```bash
-ruff check . && ruff format --check . && mypy && pytest -q
+uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q
 ```
 
 - [ ] **Step 8: Commit**
@@ -912,10 +912,11 @@ wiring rather than weakening this test.
 - [ ] **Step 3: Run the whole suite and the other gates**
 
 ```bash
-ruff check . && ruff format --check . && mypy && pytest -q
+uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q
 ```
-Expected: all clean, 699 tests passing (692 baseline + 3 storage + 4 flow API). Nothing else should move;
-if the UI test from Task 3 fails here, Task 3 regressed and has to be fixed in its own commit.
+Expected: all clean, 702 passed (692 baseline + 3 storage + 5 flow API + 1 UI + 1 ffmpeg-child). Nothing
+else should move; if the UI test from Task 3 fails here, Task 3 regressed and has to be fixed in its own
+commit.
 
 - [ ] **Step 4: Commit**
 
@@ -926,12 +927,102 @@ git commit -m "test(flow): prove cancelling a flow stops its ffmpeg child (#7)"
 
 - [ ] **Step 5: Post the ticket evidence and close #7**
 
+Deferred to the very end: run this after Task 5, so the comment lists Task 5's commit too.
+
 ```bash
 gh issue comment 7 --body "$(git log --format='- %h %s' 9da321a..HEAD)"
 gh issue close 7
 ```
 
 Include in the comment the six acceptance criteria and the test that covers each, plus the four gate results, following `docs/agents/issue-tracker.md`.
+
+---
+
+## Task 5: End a cancelled flow deterministically
+
+The real-server smoke test after Task 4 found that `POST /api/flows/{id}/cancel` could answer with
+the flow still `running`: `MediaQueue.cancel` only signals a *running* stage, so the flow row flips
+on the worker thread through `advance()`, and a stage that finished inside that window made
+`Library.cancel_job` raise `ValueError`, which the route maps to 404. Cancelling is now idempotent
+and terminal in the response.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_workspace_flow_api.py`; `BlockingAdapter` already holds a download open.
+
+```python
+def test_cancelling_a_running_stage_ends_the_flow_before_the_answer(tmp_path: Path) -> None:
+    """The worker ends the flow on its own thread; the response must not race it.
+
+    Cancelling a *running* stage used to return the flow still `running` — the cascade
+    through `advance()` had not run yet — and a stage that finished in that window made
+    `Library.cancel_job` raise, which surfaced as a bogus 404 「流程不存在」.
+    """
+    adapter = BlockingAdapter()
+    client, library = make_flow_client(tmp_path, adapter, FakeFFmpeg())
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        started = start_flow(client, video["id"], "en")
+        flow_id = _flow_id(library, started.json()["flow"]["id"])
+        assert adapter.entered.wait(5)
+
+        cancelled = client.post(f"/api/flows/{flow_id}/cancel", headers=ORIGIN)
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["flow"]["status"] == "cancelled"
+        assert cancelled.json()["flow"]["error_code"] == "cancelled"
+        assert [stage["status"] for stage in cancelled.json()["stages"]][0] == "cancelled"
+        assert client.get(f"/api/flows/{flow_id}").json()["flow"]["status"] == "cancelled"
+        adapter.release.set()
+        assert confirm(client, video["id"], target_language="en").json()["busy"] is False
+```
+
+- [ ] **Step 2: Run it against the current code and watch it fail**
+
+Run: `pytest tests/test_workspace_flow_api.py -k running_stage_ends -v`
+Expected: FAIL at `assert cancelled.json()["flow"]["status"] == "cancelled"` — reports `'running'`.
+
+- [ ] **Step 3: Make `cancel` terminal**
+
+In `FlowService.cancel`, tolerate a stage that finished underneath the read, and end the flow
+inside the call instead of leaving it to the worker:
+
+```python
+            try:
+                self.cancel_job(str(job["id"]))
+            except ValueError:
+                # The stage finished between the read above and the cancel, so there is no
+                # process left to terminate; fall through and end the flow here instead.
+                pass
+        # The worker turns a cancelled stage into a cancelled flow, but it does so on its own
+        # thread. Ending the flow here as well makes the answer deterministic and keeps a dead
+        # worker from leaving a `running` flow that blocks every later start. When the worker
+        # gets there first this is a no-op: `update_flow` only writes `running` rows.
+        if self.library.get_flow(flow_id)["status"] == "running":
+            self.library.update_flow(flow_id, status="cancelled", error="cancelled")
+        return self.status(flow_id)
+```
+
+The `else:` branch that used to hold the bare `update_flow` is gone; the terminal write now runs on
+every path, and the `if` keeps it from clobbering a flow the worker already ended.
+
+- [ ] **Step 4: Run the four gates**
+
+```bash
+uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q
+```
+Expected: all clean, 703 passed (692 baseline + 10 the other tasks added + 1 here). Nothing else
+should move.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/video_content_capture/workspace/flows.py tests/test_workspace_flow_api.py
+git commit -m "fix(flow): end a cancelled flow deterministically (#7)"
+```
+
+Then close the ticket with Task 4 Step 5, which must run last.
 
 ---
 
@@ -949,11 +1040,12 @@ Include in the comment the six acceptance criteria and the test that covers each
 | §6.1 failed stage and reason | Task 2 Step 1 | `retry_resumes_the_failed_stage_without_downloading_again` |
 | §6.2 no re-download or re-translation | Task 2 Step 1 | the same test plus `retry_after_a_chaining_failure_redoes_only_the_chain` |
 | §6.3 cancel terminates the child | Task 4 | `test_cancelling_a_flow_stops_its_running_ffmpeg_child` |
+| §6.3 cancel answers with a terminal flow | Task 5 | `test_cancelling_a_running_stage_ends_the_flow_before_the_answer` |
 | §6.4 duplicate start 409 | Task 2 Step 7, plus the pre-existing test kept | `test_duplicate_start_is_conflicted_while_the_flow_runs`, `flow_routes_report...` |
 | §6.5 restart labelling and recovery | Task 2 Step 1 | `test_restart_marks_the_flow_interrupted_and_lets_the_ui_retry_it` |
 | §6.6 storage and service contracts | Tasks 1, 2 | the storage tests plus the four flow API tests |
 | §6.7 UI contract | Task 3 Step 1 | `test_one_click_flow_exposes_cancel_and_retry_controls` |
-| §6.8 four gates | Every task | `ruff check . && ruff format --check . && mypy && pytest -q` |
+| §6.8 four gates | Every task | `uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q` |
 
 No spec section is left without a task, and no test lives in a task whose code it needs.
 
@@ -976,8 +1068,10 @@ a message or a test body.
 **4. Sequencing**
 
 Tasks 1 → 2 → 3 are strictly ordered (each consumes the previous one's interface). Task 4 consumes
-Tasks 1-3 and closes the ticket, so it is last. Every task ends green on its own: no task contains a
-test whose route, hook or element another task has not added yet.
+Tasks 1-3. Task 5 grew out of a real-server smoke test after Task 4 and touches only `cancel`, so it
+can land in any order after Task 2, but the ticket comment has to wait for it. Closing the ticket is
+Task 4 Step 5 and runs last. Every task ends green on its own: no task contains a test whose route,
+hook or element another task has not added yet.
 
 ## Execution Handoff
 
