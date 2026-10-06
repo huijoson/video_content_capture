@@ -452,9 +452,12 @@ function renderFlowStatus() {
   const stages = element("flow-stages");
   stages.replaceChildren();
   const payload = flowStatus;
-  element("flow-status").textContent = !payload
+  let summary = !payload
     ? "尚未開始一鍵流程。"
     : `流程 ${statusLabels[payload.flow.status] || payload.flow.status} · ${payload.stages.filter((stage) => stage.status === "completed").length}/${payload.stages.length} 階段完成`;
+  if (payload?.flow.status === "interrupted") summary += " · 已中斷，需手動重試";
+  else if (payload?.flow.status === "failed" && payload.flow.error_code) summary += ` · ${jobErrorLabel(payload.flow.error_code)}`;
+  element("flow-status").textContent = summary;
   if (payload) {
     for (const stage of payload.stages) {
       const item = document.createElement("li");
@@ -464,6 +467,7 @@ function renderFlowStatus() {
       stages.append(item);
     }
   }
+  renderFlowActions();
   const artifact = element("flow-artifact");
   artifact.replaceChildren();
   if (payload?.artifact) {
@@ -477,13 +481,42 @@ function renderFlowStatus() {
   }
 }
 
+function renderFlowActions() {
+  const actions = element("flow-actions");
+  const status = flowStatus?.flow.status ?? null;
+  actions.hidden = !status;
+  if (!status) return;
+  // A confirmation-required export can only be redone by choosing MKV, so no dead button.
+  const retryable = ["failed", "cancelled", "interrupted"].includes(status) &&
+    flowStatus.flow.error_code !== "container_confirmation_required";
+  element("cancel-flow").hidden = status !== "running";
+  element("retry-flow").hidden = !retryable;
+}
+
+async function flowAction(button, action) {
+  if (!flowId || button.disabled) return;
+  button.disabled = true;
+  try {
+    flowStatus = await request(`/api/flows/${controlled(flowId)}${action}`, "POST");
+    renderFlow();
+    await pollJobs();
+  } catch (error) { showError(error); }
+  finally { button.disabled = false; }
+}
+
+element("cancel-flow").addEventListener("click", () => flowAction(element("cancel-flow"), "/cancel"));
+element("retry-flow").addEventListener("click", () => flowAction(element("retry-flow"), "/retry"));
+
 async function refreshFlow() {
   if (!currentVideo) { flowConfirm = null; flowConfirmVideoId = null; flowStatus = null; flowId = null; renderFlow(); return; }
   flowConfirming = true;
   try {
     await requestFlowConfirm();
-    if (flowId) flowStatus = await request(`/api/flows/${controlled(flowId)}`);
-    else flowStatus = null;
+    // A reload keeps no flow id; adopt the video's latest so an interrupted flow is visible.
+    if (!flowId && flowConfirm?.latest_flow_id) flowId = flowConfirm.latest_flow_id;
+    if (flowId && (!flowStatus || activeStatuses.has(flowStatus.flow.status))) {
+      flowStatus = await request(`/api/flows/${controlled(flowId)}`);
+    }
   } catch (error) {
     flowConfirm = null; flowConfirmVideoId = null; flowStatus = null;
     element("flow-summary").textContent = "確認內容暫時無法讀取，請稍後再試。";
