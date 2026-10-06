@@ -166,6 +166,7 @@ def create_app(
     )
     flows = FlowService(library, settings, acquisition, translation, exporter)
     flows.bind(queue.enqueue)
+    flows.bind_cancel(queue.cancel)
     queue.bind(flows.on_job_finished)
 
     @asynccontextmanager
@@ -641,6 +642,26 @@ def create_app(
     def flow_status(flow_id: str) -> Record:
         try:
             return flows.status(flow_id)
+        except (KeyError, ValueError):
+            raise HTTPException(404, "流程不存在") from None
+
+    @app.post("/api/flows/{flow_id}/cancel")
+    def cancel_flow(flow_id: str) -> Record:
+        """Stop the whole flow, including the child process of its current stage."""
+        try:
+            return flows.cancel(flow_id)
+        except FlowError as error:
+            raise HTTPException(409, str(error)) from None
+        except (KeyError, ValueError):
+            raise HTTPException(404, "流程不存在") from None
+
+    @app.post("/api/flows/{flow_id}/retry")
+    def retry_flow(flow_id: str) -> Record:
+        """Resume from the failed stage; finished downloads and translations are reused."""
+        try:
+            return flows.retry(flow_id)
+        except FlowError as error:
+            raise HTTPException(409, str(error)) from None
         except (KeyError, ValueError):
             raise HTTPException(404, "流程不存在") from None
 

@@ -37,6 +37,12 @@ MISSING_KEY_MESSAGE = "請在專案 .env 設定 GEMINI_API_KEY 並重啟服務"
 BUSY_MESSAGE = "此影片的一鍵流程正在進行中，請等待完成或先取消目前的工作"
 RESOLUTION_MESSAGE = "請選擇來源實際有的解析度"
 TARGET_MESSAGE = "請選擇有效的目標語系"
+FLOW_CANCEL_MESSAGE = "這條流程已經結束"
+FLOW_RUNNING_MESSAGE = "這條流程仍在進行"
+FLOW_DONE_MESSAGE = "這條流程已經完成"
+FLOW_NO_STAGE_MESSAGE = "這條流程沒有可重試的階段工作，請重新開始"
+FLOW_MKV_MESSAGE = "請改選 MKV，重新確認摘要並建立新的匯出工作"
+FLOW_UNBOUND_MESSAGE = "取消功能尚未啟用"
 
 
 class FlowError(ValueError):
@@ -128,10 +134,15 @@ class FlowService:
         self.library, self.settings = library, settings
         self.acquisition, self.translation, self.exporter = acquisition, translation, exporter
         self.enqueue: Callable[[Record], None] = lambda job: None
+        self.cancel_job: Callable[[str], None] | None = None
 
     def bind(self, enqueue: Callable[[Record], None]) -> None:
         """The coordinator runs inside the worker's completion hook, so enqueue is injected."""
         self.enqueue = enqueue
+
+    def bind_cancel(self, cancel: Callable[[str], None]) -> None:
+        """Cancelling a stage must terminate its child process, which only the queue can do."""
+        self.cancel_job = cancel
 
     def _video(self, video_id: str) -> Record:
         return self.library.get_video(video_id)
@@ -209,6 +220,9 @@ class FlowService:
             "gemini_configured": bool(self.settings.gemini_api_key),
             "blocked_reason": MISSING_KEY_CODE if missing else None,
             "busy": self.library.active_flow(video_id) is not None,
+            "latest_flow_id": (
+                str(latest["id"]) if (latest := self.library.latest_flow(video_id)) else None
+            ),
         }
 
     def _expected_original(self, video: Record, source: SourceMetadata) -> str:
@@ -270,6 +284,58 @@ class FlowService:
             self.advance(flow_id, job)
         except Exception:
             self.library.update_flow(flow_id, status="failed", error="flow_failed")
+
+    def _stage_job(self, flow_id: str, stage: str) -> Record | None:
+        """The job that carries the flow's current stage, if it was ever created."""
+        for job in self.library.flow_jobs(flow_id):
+            if str(job["kind"]) == stage:
+                return job
+        return None
+
+    def cancel(self, flow_id: str) -> Record:
+        """End a running flow and terminate the child process of its current stage.
+
+        Cancelling the stage job is enough: `MediaQueue.cancel` signals a running attempt
+        and finishes a queued one itself, and `advance` turns that into a cancelled flow.
+        """
+        flow = self.library.get_flow(flow_id)
+        if flow["status"] != "running":
+            raise FlowError(FLOW_CANCEL_MESSAGE)
+        job = self._stage_job(flow_id, str(flow["stage"]))
+        if job is not None and str(job["status"]) in {"queued", "running"}:
+            if self.cancel_job is None:
+                # Without the queue hook a "cancelled" flow could leave ffmpeg running.
+                raise FlowError(FLOW_UNBOUND_MESSAGE)
+            self.cancel_job(str(job["id"]))
+        else:
+            # Nothing queued or running: the stage never produced work to cancel.
+            self.library.update_flow(flow_id, status="cancelled", error="cancelled")
+        return self.status(flow_id)
+
+    def retry(self, flow_id: str) -> Record:
+        """Resume an ended flow from its failed stage, reusing every finished artifact."""
+        flow = self.library.get_flow(flow_id)
+        status = str(flow["status"])
+        if status == "running":
+            raise FlowError(FLOW_RUNNING_MESSAGE)
+        if status == "completed":
+            raise FlowError(FLOW_DONE_MESSAGE)
+        job = self._stage_job(flow_id, str(flow["stage"]))
+        if job is None:
+            # Reopening without work would leave a running flow blocking every later start.
+            raise FlowError(FLOW_NO_STAGE_MESSAGE)
+        if str(job["kind"]) == "translation" and not self.settings.gemini_api_key:
+            raise FlowKeyError(MISSING_KEY_MESSAGE)
+        if str(job["error_code"]) == "container_confirmation_required":
+            raise FlowError(FLOW_MKV_MESSAGE)
+        # Reopen first: a fast worker must not finish the job before the flow accepts it.
+        self.library.reopen_flow(flow_id)
+        if str(job["status"]) == "completed":
+            # The stage succeeded and chaining failed; redo the chaining, not the stage.
+            return self.status(str(self.advance(flow_id, job)["id"]))
+        self.library.retry_job(str(job["id"]))
+        self.enqueue(self.library.get_job(str(job["id"])))
+        return self.status(flow_id)
 
     def advance(self, flow_id: str, job: Record) -> Record:
         """On success create the next existing job kind; otherwise end the flow here."""
