@@ -26,6 +26,8 @@ MAX_SUBTITLE_BYTES = 10 * 1024 * 1024
 MAX_CUES = 100_000
 _LANGUAGE = re.compile(r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*\Z")
 _TIMESTAMP = re.compile(r"(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{3})\Z")
+_VTT_HEADER_FIELD = re.compile(r"[A-Za-z][A-Za-z0-9-]*: ")
+_VTT_INLINE_TIMESTAMP = re.compile(r"<\d{1,3}:\d{2}:\d{2}\.\d{3}>")
 
 
 class Cue(BaseModel):
@@ -63,8 +65,11 @@ class _PlainText(HTMLParser):
 
 
 def plain_text(text: str) -> str:
+    # WebVTT karaoke timestamps sit inside cue text (`word<00:00:01.000><c> next</c>`).
+    # They are not markup, so the parser would keep them literally and they would be
+    # burned into the video. They carry no words, so drop them before parsing.
     parser = _PlainText()
-    parser.feed(text)
+    parser.feed(_VTT_INLINE_TIMESTAMP.sub("", text))
     return scrub_text("".join(parser.text)).strip()
 
 
@@ -74,12 +79,23 @@ def validate_language(language: str) -> str:
     return language
 
 
+def _duration_slack(duration: float) -> float:
+    """How far a cue may run past the reported duration and still be plausible.
+
+    Platform metadata rounds the duration, and caption tracks drift past the end of the
+    media: a real 314 s source ends its last automatic cue at 315.52 s. Beyond this much
+    overrun the timestamp is broken, not merely imprecise.
+    """
+    return max(1.0, duration * 0.02)
+
+
 def validate_cues(cues: list[Cue], duration: float) -> ParsedSubtitles:
     if not cues or len(cues) > MAX_CUES:
         raise ValueError("Subtitle must contain 1–100,000 cues")
     result: list[Cue] = []
     warnings: list[str] = []
     ids: set[str] = set()
+    slack = _duration_slack(duration)
     for index, cue in enumerate(cues, 1):
         if cue.id in ids or not cue.id or "\n" in cue.id or "-->" in cue.id:
             raise ValueError(f"cue {index}: invalid or duplicate cue ID")
@@ -88,7 +104,7 @@ def validate_cues(cues: list[Cue], duration: float) -> ParsedSubtitles:
             raise ValueError(f"cue {index}: nonfinite time")
         if cue.start < 0 or cue.start >= cue.end or cue.start >= duration:
             raise ValueError(f"cue {index}: invalid time")
-        if cue.end > duration + 1:
+        if cue.end > duration + slack:
             raise ValueError(f"cue {index}: exceeds video duration")
         if cue.end > duration:
             warnings.append(f"cue {index}: end clipped to video duration")
@@ -133,14 +149,41 @@ def parse_subtitles(data: bytes, format: str, duration: float) -> ParsedSubtitle
             continue
         block_line = index + 1
         block: list[str] = []
-        while index < len(lines) and lines[index].strip():
-            block.append(lines[index])
+        timed = False
+        while index < len(lines):
+            line = lines[index]
+            if vtt:
+                # Only a truly empty line ends a WebVTT block: YouTube writes a bare space
+                # as the empty roll-up line inside a cue body. A timestamp appearing after
+                # the block already has one starts the next cue, so a separator that is
+                # merely whitespace still splits blocks.
+                if line == "" or (timed and "-->" in line):
+                    break
+            elif not line.strip():
+                break
+            timed = timed or "-->" in line
+            block.append(line)
             index += 1
         if vtt and (block[0].startswith("NOTE") or block[0] in {"STYLE", "REGION"}):
             continue
         number = len(cues) + 1
         timing_index = 0 if "-->" in block[0] else 1
         line_number = block_line + timing_index
+        if vtt:
+            if not cues and all(_VTT_HEADER_FIELD.match(line) for line in block):
+                # WebVTT allows header metadata (`Kind: captions`, `Language: en`) between
+                # the header line and the first cue. It is not a cue. Matching the whole
+                # block keeps a genuinely malformed file failing instead of disappearing.
+                continue
+            if timing_index < len(block):
+                body = block[timing_index + 1 :]
+                if body and all(not line.strip() for line in body):
+                    # YouTube emits a roll-up cue whose body is blank (a bare space,
+                    # sometimes several) where no words are spoken yet. It carries no text,
+                    # so it is not a cue. Only whitespace counts: a body whose markup still
+                    # strips to nothing, such as `<script>`, keeps failing below, and a cue
+                    # with no body at all stays malformed.
+                    continue
         try:
             if not vtt and timing_index == 1 and not block[0].isdigit():
                 raise ValueError("invalid SRT cue number")
@@ -157,7 +200,9 @@ def parse_subtitles(data: bytes, format: str, duration: float) -> ParsedSubtitle
             )
             checked = validate_cues([cue], duration)
             cues.extend(checked.cues)
-            warnings.extend(checked.warnings)
+            warnings.extend(
+                warning.replace("cue 1:", f"cue {number}:", 1) for warning in checked.warnings
+            )
             if len(cues) > MAX_CUES:
                 raise ValueError("exceeds 100,000 cues")
         except ValueError as exc:
