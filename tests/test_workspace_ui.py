@@ -141,3 +141,23 @@ def test_one_click_flow_confirm_screen_controls() -> None:
     # Progress and the finished artifact come from the flow status surface.
     assert "flow-artifact" in script and "下載影片" in script
     assert "/api/exports/${controlled(payload.artifact.id)}/download" in script
+
+
+def test_one_click_flow_exposes_cancel_and_retry_controls() -> None:
+    markup = (STATIC / "index.html").read_text()
+    page = Elements()
+    page.feed(markup)
+    for element_id in ("flow-actions", "cancel-flow", "retry-flow"):
+        assert element_id in page.by_id
+    assert page.by_id["cancel-flow"]["tag"] == "button"
+    assert page.by_id["retry-flow"]["tag"] == "button"
+    # Both controls start hidden; the panel reveals only the one that applies.
+    assert "hidden" in page.by_id["flow-actions"]
+    assert "取消流程" in markup and "重試流程" in markup
+    script = (STATIC / "workspace.js").read_text()
+    assert "需手動重試" in script
+    assert '"/cancel"' in script and '"/retry"' in script
+    assert "/api/flows/${controlled(flowId)}" in script
+    # A reloaded page adopts the video's latest flow so an interrupted one is visible.
+    assert "latest_flow_id" in script
+    assert "innerHTML" not in script

@@ -25,7 +25,7 @@ from video_content_capture.workspace.flows import (
 from video_content_capture.workspace.storage import Library
 from video_content_capture.workspace.subtitles import Cue
 from video_content_capture.workspace.translation import TranslationResponse
-from video_content_capture.workspace.youtube import SourceMetadata, parse_metadata
+from video_content_capture.workspace.youtube import SourceError, SourceMetadata, parse_metadata
 
 VTT = b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello world\n"
 
@@ -63,9 +63,13 @@ class FlowAdapter(FakeAdapter):
             "https://youtu.be/abcdefghijk",
         )
         self.subtitles_downloaded = 0
+        # Set to an exception to fail the subtitle stage; cleared to let a retry succeed.
+        self.subtitle_failure: Exception | None = None
 
     def download_subtitle(self, source: SourceMetadata, track, cancel: Event) -> bytes:
         self.subtitles_downloaded += 1
+        if self.subtitle_failure is not None:
+            raise self.subtitle_failure
         return VTT
 
 
@@ -101,9 +105,14 @@ class HoldingAdapter(FlowAdapter):
 
 
 class FakeTranslation:
+    def __init__(self) -> None:
+        # Counted so a retry can prove it reused a finished translation instead of redoing it.
+        self.calls = 0
+
     def translate(
         self, key: SecretStr, model: str, language: str, cues: list[Cue]
     ) -> TranslationResponse:
+        self.calls += 1
         return TranslationResponse(
             json.dumps({"cues": [{"id": cue.id, "text": "翻譯"} for cue in cues]}), "STOP"
         )
@@ -119,12 +128,12 @@ def confirm(client: TestClient, video_id: str, **params: object):
     return client.get(f"/api/videos/{video_id}/flow", params=params)
 
 
-def wait_for_flow(client: TestClient, flow_id: str) -> dict:
+def wait_for_flow(client: TestClient, flow_id: str, expect: str = "completed") -> dict:
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         payload = client.get(f"/api/flows/{flow_id}").json()
         if payload["flow"]["status"] != "running":
-            assert payload["flow"]["status"] == "completed", payload
+            assert payload["flow"]["status"] == expect, payload
             return payload
         time.sleep(0.01)
     pytest.fail("One-click flow did not finish within 10 seconds")
@@ -545,3 +554,275 @@ def test_cancelling_a_queued_stage_ends_the_flow_instead_of_wedging_it(tmp_path:
             assert restarted.json()["flow"]["id"] != flow_id
         finally:
             adapter.release.set()
+
+
+def make_flow_client(
+    tmp_path: Path,
+    adapter: FlowAdapter,
+    runner: FakeFFmpeg,
+    translation: FakeTranslation | None = None,
+):
+    """A client with a Gemini key so a translating flow can be driven end to end."""
+    library = Library(tmp_path / "library")
+    library.initialize()
+    settings = replace(
+        load_settings(tmp_path, library_dir=library.root),
+        gemini_api_key=SecretStr("fake-api-sentinel"),
+    )
+    client = TestClient(
+        create_app(
+            settings,
+            adapter,
+            translation_adapter=translation or FakeTranslation(),
+            asr_adapter=FakeASR(),
+            media_exporter=MediaExporter(runner),
+        ),
+        base_url="http://127.0.0.1:8765",
+    )
+    return client, library
+
+
+def _flow_id(library: Library, flow_id: str) -> str:
+    """The stored id, typed: `Record` values are `object` under mypy strict."""
+    return str(library.get_flow(flow_id)["id"])
+
+
+def test_rejected_retry_and_cancel_leave_the_flow_untouched(tmp_path: Path) -> None:
+    """Cancelling a queued stage is enough; retrying a live flow must change nothing."""
+    adapter = HoldingAdapter()
+    client, library = make_flow_client(tmp_path, adapter, FakeFFmpeg())
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        # The fake adapter answers the same metadata for any URL, so the second video has
+        # to be imported directly; that is the pattern the existing cancel test uses.
+        other = library.import_video(
+            "lmnopqrstuv",
+            "第二部",
+            10,
+            "https://youtu.be/lmnopqrstuv",
+            adapter.source.model_copy(update={"youtube_id": "lmnopqrstuv"}).model_dump_json(),
+        )
+        blocking = client.post(
+            f"/api/videos/{other['id']}/jobs",
+            json={"format_id": "v", "audio_id": "a"},
+            headers=ORIGIN,
+        ).json()
+        assert adapter.entered.wait(5)
+        try:
+            started = start_flow(client, video["id"], "en")
+            assert started.status_code == 200, started.text
+            created = _flow_id(library, started.json()["flow"]["id"])
+            stage_id = str(started.json()["job"]["id"])
+            assert stage_id != blocking["id"]
+            assert library.get_job(stage_id)["status"] == "queued"
+
+            # Retrying a live flow is a client error, and the row is left alone.
+            retried = client.post(f"/api/flows/{created}/retry", headers=ORIGIN)
+            assert retried.status_code == 409, retried.text
+            assert library.get_flow(created)["status"] == "running"
+
+            unknown = client.post("/api/flows/0123456789abcdef/cancel", headers=ORIGIN)
+            assert unknown.status_code == 404
+
+            cancelled = client.post(f"/api/flows/{created}/cancel", headers=ORIGIN)
+            assert cancelled.status_code == 200, cancelled.text
+            assert cancelled.json()["flow"]["status"] == "cancelled"
+            assert cancelled.json()["flow"]["error_code"] == "cancelled"
+            assert library.get_job(stage_id)["status"] == "cancelled"
+
+            # Cancelling is final; the flow may still be resumed from its first stage.
+            assert client.post(f"/api/flows/{created}/cancel", headers=ORIGIN).status_code == 409
+            resumed = client.post(f"/api/flows/{created}/retry", headers=ORIGIN)
+            assert resumed.status_code == 200, resumed.text
+            assert resumed.json()["flow"]["status"] == "running"
+        finally:
+            adapter.release.set()
+
+
+def test_retry_resumes_the_failed_stage_without_downloading_again(tmp_path: Path) -> None:
+    """A subtitle stage that fails must not restart the download it already published."""
+    adapter = FlowAdapter("en")
+    adapter.subtitle_failure = SourceError("subtitle_unavailable", "字幕已消失")
+    client, library = make_flow_client(tmp_path, adapter, FakeFFmpeg())
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        started = start_flow(client, video["id"], "zh-TW")
+        assert started.status_code == 200, started.text
+        flow_id = _flow_id(library, started.json()["flow"]["id"])
+        status = wait_for_flow(client, flow_id, expect="failed")
+        assert status["flow"]["stage"] == "subtitles"
+        assert status["flow"]["error_code"] == "subtitle_unavailable"
+        assert [stage["status"] for stage in status["stages"]] == [
+            "completed",
+            "failed",
+            "pending",
+            "pending",
+        ]
+        assert status["stages"][1]["error_code"] == "subtitle_unavailable"
+        assert adapter.downloads == 1
+
+        adapter.subtitle_failure = None
+        resumed = client.post(f"/api/flows/{flow_id}/retry", headers=ORIGIN)
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["flow"]["id"] == flow_id
+        finished = wait_for_flow(client, flow_id)
+        assert {stage["status"] for stage in finished["stages"]} == {"completed"}
+        # The retry resumed at the subtitle stage; the published download was reused.
+        assert adapter.downloads == 1
+        listed = confirm(client, video["id"], target_language="zh-TW").json()
+        assert listed["latest_flow_id"] == flow_id
+
+
+def test_retry_after_a_chaining_failure_redoes_only_the_chain(tmp_path: Path) -> None:
+    """A stage that succeeded while the next job could not be built is retryable as is.
+
+    `FakeFFmpeg(hardware=False)` refuses the VideoToolbox probe, and the burned export probes
+    it while *building* the export job — inside `FlowService._export_job`, which runs inside
+    `advance()`. So the translation stage completes and the flow dies in chaining with
+    `error_code == "flow_failed"`, `stage` still `translation` and no export job at all. That
+    is exactly the `completed`-stage branch of spec §5.2 step 6.
+    """
+    runner = FakeFFmpeg()
+    runner.hardware = False
+    translation = FakeTranslation()
+    adapter = FlowAdapter("en")
+    client, library = make_flow_client(tmp_path, adapter, runner, translation)
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        started = start_flow(client, video["id"], "zh-TW")
+        flow_id = _flow_id(library, started.json()["flow"]["id"])
+        status = wait_for_flow(client, flow_id, expect="failed")
+        assert status["flow"]["stage"] == "translation"
+        assert status["flow"]["error_code"] == "flow_failed"
+        assert translation.calls == 1
+        translated = next(job for job in library.flow_jobs(flow_id) if job["kind"] == "translation")
+        translated_id, attempt = str(translated["id"]), str(translated["attempt_id"])
+        assert translated["status"] == "completed"
+        # The chain died while building the export job, so that job was never created.
+        assert [job["kind"] for job in library.flow_jobs(flow_id)] == [
+            "download",
+            "subtitles",
+            "translation",
+        ]
+        published = [asset["id"] for asset in library.assets(video["id"])]
+        assert published
+
+        runner.hardware = True
+        resumed = client.post(f"/api/flows/{flow_id}/retry", headers=ORIGIN)
+        assert resumed.status_code == 200, resumed.text
+        finished = wait_for_flow(client, flow_id)
+        assert finished["artifact"] is not None
+        # Not one earlier stage ran again: same counts, same assets, same translation attempt.
+        assert adapter.downloads == 1
+        assert adapter.subtitles_downloaded == 1
+        assert translation.calls == 1
+        assert [asset["id"] for asset in library.assets(video["id"])] == published
+        again = library.get_job(translated_id)
+        assert again["attempt_id"] == attempt
+        assert again["status"] == "completed"
+        assert [job["kind"] for job in library.flow_jobs(flow_id)] == [
+            "download",
+            "subtitles",
+            "translation",
+            "export",
+        ]
+
+
+def test_flow_routes_report_unknown_flows_and_refuse_a_finished_one(tmp_path: Path) -> None:
+    adapter = FlowAdapter("en")
+    client, library = make_flow_client(tmp_path, adapter, FakeFFmpeg())
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        assert client.post("/api/flows/0123456789abcdef/retry", headers=ORIGIN).status_code == 404
+        started = start_flow(client, video["id"], "en")
+        flow_id = _flow_id(library, started.json()["flow"]["id"])
+        wait_for_flow(client, flow_id)
+        assert client.post(f"/api/flows/{flow_id}/cancel", headers=ORIGIN).status_code == 409
+        assert client.post(f"/api/flows/{flow_id}/retry", headers=ORIGIN).status_code == 409
+
+
+def test_restart_marks_the_flow_interrupted_and_lets_the_ui_retry_it(tmp_path: Path) -> None:
+    """A restarted service must label its unfinished flow instead of forgetting it."""
+    adapter = BlockingAdapter()
+    client, library = make_flow_client(tmp_path, adapter, FakeFFmpeg())
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        started = start_flow(client, video["id"], "en")
+        flow_id = _flow_id(library, started.json()["flow"]["id"])
+        assert adapter.entered.wait(5)
+
+        # What `Library.initialize()` does on the next service start, while the worker runs.
+        library.interrupt_running()
+        adapter.release.set()
+        assert library.get_flow(flow_id)["status"] == "interrupted"
+        listed = confirm(client, video["id"], target_language="en").json()
+        assert listed["latest_flow_id"] == flow_id
+        assert listed["busy"] is False
+        assert client.get(f"/api/flows/{flow_id}").json()["flow"]["status"] == "interrupted"
+
+        resumed = client.post(f"/api/flows/{flow_id}/retry", headers=ORIGIN)
+        assert resumed.status_code == 200, resumed.text
+        finished = wait_for_flow(client, flow_id)
+        assert {stage["status"] for stage in finished["stages"]} == {"completed"}
+
+
+def test_cancelling_a_flow_stops_its_running_ffmpeg_child(tmp_path: Path) -> None:
+    """The flow-level cancel must reach the running export, not only its database row."""
+    runner = FakeFFmpeg()
+    adapter = FlowAdapter("en")
+    client, library = make_flow_client(tmp_path, adapter, runner)
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        # `FakeFFmpeg.block` only arms the real burn: the export chaining probe always runs
+        # ffmpeg with `-t 0.1`, and that path never blocks.
+        runner.block = True
+        started = start_flow(client, video["id"], "en")
+        assert started.status_code == 200, started.text
+        flow_id = _flow_id(library, started.json()["flow"]["id"])
+        assert runner.entered.wait(5), "the export stage never reached ffmpeg"
+
+        cancelled = client.post(f"/api/flows/{flow_id}/cancel", headers=ORIGIN)
+        assert cancelled.status_code == 200, cancelled.text
+        assert runner.cancelled.wait(5), "the flow cancel never reached the ffmpeg child"
+        status = wait_for_flow(client, flow_id, expect="cancelled")
+        assert status["flow"]["error_code"] == "cancelled"
+        assert status["stages"][-1]["status"] == "cancelled"
+
+
+def test_cancelling_a_running_stage_ends_the_flow_before_the_answer(tmp_path: Path) -> None:
+    """The worker ends the flow on its own thread; the response must not race it.
+
+    Cancelling a *running* stage used to return the flow still `running` — the cascade
+    through `advance()` had not run yet — and a stage that finished in that window made
+    `Library.cancel_job` raise, which surfaced as a bogus 404 「流程不存在」.
+    """
+    adapter = BlockingAdapter()
+    client, library = make_flow_client(tmp_path, adapter, FakeFFmpeg())
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        started = start_flow(client, video["id"], "en")
+        flow_id = _flow_id(library, started.json()["flow"]["id"])
+        assert adapter.entered.wait(5)
+
+        cancelled = client.post(f"/api/flows/{flow_id}/cancel", headers=ORIGIN)
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["flow"]["status"] == "cancelled"
+        assert cancelled.json()["flow"]["error_code"] == "cancelled"
+        assert [stage["status"] for stage in cancelled.json()["stages"]][0] == "cancelled"
+        assert client.get(f"/api/flows/{flow_id}").json()["flow"]["status"] == "cancelled"
+        adapter.release.set()
+        assert confirm(client, video["id"], target_language="en").json()["busy"] is False

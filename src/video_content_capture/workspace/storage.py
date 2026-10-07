@@ -1380,6 +1380,46 @@ class Library:
                 return None
             return dict(zip((column[0] for column in cursor.description), row, strict=True))
 
+    def latest_flow(self, video_id: str) -> Record | None:
+        """The newest flow in any status; the reloaded page uses it to label its last attempt."""
+        self.get_video(video_id)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "SELECT * FROM flows WHERE video_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                (video_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return dict(zip((column[0] for column in cursor.description), row, strict=True))
+
+    def reopen_flow(self, flow_id: str) -> Record:
+        """Revive an ended flow so `advance` can chain its next stage again.
+
+        `update_flow` only ever writes `status='running'` rows, so a failed, cancelled or
+        interrupted flow needs this explicit transition. A completed flow is finished for
+        good: retrying it would re-publish an artifact the user already has.
+        """
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            flow = self._record(connection.execute("SELECT * FROM flows WHERE id = ?", (flow_id,)))
+            if flow["status"] == "running":
+                return flow
+            if flow["status"] == "completed":
+                raise ValueError("Flow already finished")
+            if connection.execute(
+                "SELECT 1 FROM flows WHERE video_id = ? AND status = 'running' AND id != ?",
+                (flow["video_id"], flow_id),
+            ).fetchone():
+                # Same wording as `create_flow`: the UI treats both as one busy flow.
+                raise ValueError("Flow already in progress")
+            connection.execute(
+                "UPDATE flows SET status = 'running', error_code = NULL, updated_at = ? "
+                "WHERE id = ?",
+                (datetime.now(UTC).isoformat(), flow_id),
+            )
+            return self._record(connection.execute("SELECT * FROM flows WHERE id = ?", (flow_id,)))
+
     def flow_jobs(self, flow_id: str) -> list[Record]:
         with self._connect() as connection:
             return self._records(
