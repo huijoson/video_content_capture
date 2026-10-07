@@ -3,7 +3,9 @@ from pathlib import Path
 import pytest
 
 from video_content_capture.workspace.storage import Library
-from video_content_capture.workspace.subtitles import parse_subtitles
+from video_content_capture.workspace.subtitles import parse_subtitles, render_subtitles
+
+FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
 
 
 def test_import_versions_are_immutable_and_selections_independent(tmp_path: Path) -> None:
@@ -345,3 +347,119 @@ def test_ambiguous_or_disappeared_platform_track_never_calls_asr(
             track if failure == "disappeared_track" else None,
         )
     assert calls == []
+
+
+def test_youtube_header_metadata_block_is_not_a_cue() -> None:
+    """The `Kind:`/`Language:` block between the header and cue 1 is not a cue (#13).
+
+    YouTube auto-captions put it there; reading it as a cue tried to parse `Language: en`
+    as a timestamp and failed the whole acquisition with `subtitle_acquisition_failed`.
+    """
+    parsed = parse_subtitles(
+        b"WEBVTT\nKind: captions\nLanguage: en\n\n"
+        b"00:00:00.080 --> 00:00:03.319 align:start position:0%\nhello there\n\n"
+        b"00:00:03.319 --> 00:00:06.200 align:start position:0%\nsecond cue\n",
+        "vtt",
+        10,
+    )
+    assert [cue.text for cue in parsed.cues] == ["hello there", "second cue"]
+    assert parsed.cues[0].start == 0.08
+
+
+def test_only_a_well_formed_header_block_is_skipped() -> None:
+    """A block that is not header-shaped still reports its own error (#13).
+
+    The fix must not swallow a genuinely malformed file: a first block without `-->` and
+    without header syntax has to keep failing, not disappear silently.
+    """
+    with pytest.raises(ValueError, match="cue 1.*invalid timestamp"):
+        parse_subtitles(b"WEBVTT\n\nnot a timestamp\nhello\n", "vtt", 10)
+    with pytest.raises(ValueError, match="cue 1.*invalid (timestamp|SRT cue number)"):
+        parse_subtitles(b"1\ngarbage\nhello\n", "srt", 10)
+
+
+def test_youtube_rollup_automatic_captions_parse() -> None:
+    """A real-shaped YouTube automatic-caption track parses, text and all (#13).
+
+    This fixture reproduces the four shapes that each broke acquisition on their own: the
+    `Kind:`/`Language:` header block, blank roll-up bodies holding a single space, inline
+    karaoke timestamps, and a closing cue that drifts past the rounded duration.
+    """
+    raw = (FIXTURES / "vtt" / "youtube-rollup-automatic.vtt").read_bytes()
+    parsed = parse_subtitles(raw, "vtt", 12.0)
+
+    assert [cue.text for cue in parsed.cues] == [
+        "a rolling caption keeps",
+        "a rolling caption keeps",
+        "a rolling caption keeps\nf every word",
+        "b after a blank cue",
+        "closing cue",
+    ]
+    # Blank roll-up bodies are not cues, and the header block is not cue 1.
+    assert parsed.cues[0].start == 0.64
+    assert parsed.cues[0].end == 4.15
+
+
+def test_no_markup_or_inline_timestamp_reaches_rendered_subtitles() -> None:
+    """Nothing the platform embeds inside a cue is burned into the video (#13).
+
+    An inline karaoke timestamp is not valid markup, so an HTML parser keeps it as text;
+    left alone it would show up verbatim on screen.
+    """
+    raw = (FIXTURES / "vtt" / "youtube-rollup-automatic.vtt").read_bytes()
+    rendered = render_subtitles(parse_subtitles(raw, "vtt", 12.0).cues, "srt").decode("utf-8")
+
+    assert "<" not in rendered
+    assert "00:00:00.799" not in rendered
+
+
+def test_a_blank_rollup_body_is_skipped_but_empty_markup_is_not() -> None:
+    """Only a whitespace-only body is a blank roll-up cue (#13).
+
+    A body that holds markup stripping to nothing still has to fail: those bytes were
+    meant to be shown, and silently dropping them would hide a real defect.
+    """
+    blank = parse_subtitles(
+        b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n \n\n00:00:03.000 --> 00:00:04.000\ntext\n",
+        "vtt",
+        10,
+    )
+    assert [cue.text for cue in blank.cues] == ["text"]
+
+    with pytest.raises(ValueError, match="empty text"):
+        parse_subtitles(
+            b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<script>x()</script>\n", "vtt", 10
+        )
+    with pytest.raises(ValueError, match="empty text"):
+        parse_subtitles(b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n", "vtt", 10)
+
+
+def test_a_whitespace_separated_pair_is_still_two_cues() -> None:
+    """A blank line that is only whitespace still separates cues (#13).
+
+    The roll-up fix must not run two cues together when their separator is a space.
+    """
+    parsed = parse_subtitles(
+        b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\none\n \n00:00:03.000 --> 00:00:04.000\ntwo\n",
+        "vtt",
+        10,
+    )
+    assert [cue.text for cue in parsed.cues] == ["one", "two"]
+
+
+def test_a_drifting_tail_cue_is_clipped_and_named() -> None:
+    """A cue drifting past the rounded duration is clipped, and the warning names it (#13).
+
+    Platform metadata rounds the duration down, so a real track's last cue can run past
+    it; a warning pointing at `cue 1` would misdirect whoever reads it.
+    """
+    parsed = parse_subtitles(
+        b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\none\n\n00:00:03.000 --> 00:00:10.500\ntwo\n",
+        "vtt",
+        10,
+    )
+    assert [cue.end for cue in parsed.cues] == [2.0, 10.0]
+    assert parsed.warnings == ["cue 2: end clipped to video duration"]
+
+    with pytest.raises(ValueError, match="exceeds video duration"):
+        parse_subtitles(b"WEBVTT\n\n00:00:01.000 --> 00:00:30.000\nfar past\n", "vtt", 10)
