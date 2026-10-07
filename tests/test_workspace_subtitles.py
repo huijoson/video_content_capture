@@ -130,6 +130,39 @@ def test_multilingual_mlx_preserves_original_text(tmp_path: Path) -> None:
     assert captured["language"] == "en"
 
 
+def test_mlx_drops_segments_that_cannot_be_spoken_audio(tmp_path: Path) -> None:
+    """Whisper repeats its closing line past the end of the media, and time alone proves it.
+
+    Those repeats start after the media ends, so the shared strict check (`validate_cues`)
+    failed the whole acquisition on the last of them. Dropping the impossible segments here
+    fixes local recognition without loosening the check every other source still relies on.
+    """
+    from threading import Event
+
+    from video_content_capture.workspace.subtitles import MLXSubtitleAdapter
+
+    def fake(*args: object, **kwargs: object) -> object:
+        return {
+            "language": "en",
+            "segments": [
+                {"start": 0.0, "end": 1.0, "text": " hello"},
+                {"start": 9.5, "end": 10.5, "text": " tail"},
+                {"start": 11.0, "end": 12.0, "text": " I'm excited about the API."},
+                {"start": 12.0, "end": 13.0, "text": " I'm excited about the API."},
+                {"start": 13.0, "end": 14.0, "text": " I'm excited about the API."},
+            ],
+        }
+
+    _, cues = MLXSubtitleAdapter(fake).transcribe(tmp_path / "media", "en", 10, Event())
+    assert [cue.text for cue in cues] == ["hello", "tail"]
+    assert [cue.end for cue in cues] == [1.0, 10.0]
+
+    # The shared check stays strict for every other source: a platform track with the same
+    # timestamp still fails rather than being silently dropped.
+    with pytest.raises(ValueError, match="cue 1: invalid time"):
+        parse_subtitles(b"WEBVTT\n\n00:00:11.000 --> 00:00:12.000\ntail\n", "vtt", 10)
+
+
 @pytest.mark.parametrize(
     "tracks,expected", [([False, True], "platform_manual"), ([True], "platform_auto"), ([], "asr")]
 )
@@ -177,6 +210,99 @@ def test_acquisition_priority(tracks: list[bool], expected: str, tmp_path: Path)
         "query",
         {"platform_manual": "manual", "platform_auto": "auto", "asr": "asr"}[expected],
     ]
+
+
+def test_a_region_tagged_original_still_finds_its_base_language_track(tmp_path: Path) -> None:
+    """`en-US` must find the platform track keyed `en`, not fall through to local recognition.
+
+    yt-dlp reports the original as a region tag while YouTube keys the caption track by base
+    language, so exact matching found no candidate and quietly ran local recognition on a
+    source that already had a manual transcript.
+    """
+    from threading import Event
+
+    from video_content_capture.workspace.subtitles import acquire_subtitles
+    from video_content_capture.workspace.youtube import SourceMetadata, SubtitleTrack
+
+    source = SourceMetadata(
+        youtube_id="abcdefghijk",
+        source_url="https://youtube.com",
+        title="one",
+        duration=10,
+        formats=[],
+        audio_tracks=[],
+        subtitles=[
+            SubtitleTrack(language="en", automatic=False, extensions=["vtt"]),
+            SubtitleTrack(language="en-orig", automatic=True, extensions=["vtt"]),
+        ],
+        default_format_id="v",
+        default_audio_id="a",
+        above_1080p=False,
+        original_language="en-US",
+    )
+    calls: list[str] = []
+
+    class Adapter:
+        def query(self, *args: object) -> SourceMetadata:
+            return source
+
+        def download_subtitle(self, *args: object) -> bytes:
+            calls.append("manual")
+            return b"WEBVTT\n\n00:01.000 --> 00:02.000\nhello"
+
+    class ASR:
+        def transcribe(self, *args: object) -> object:
+            raise AssertionError("A platform track exists, so local recognition must not run")
+
+    language, kind, _ = acquire_subtitles(Adapter(), ASR(), source, tmp_path / "media", Event())
+    assert (language, kind) == ("en", "platform_manual")
+    assert calls == ["manual"]
+
+
+def test_an_exact_regional_track_still_wins_over_its_base_language(tmp_path: Path) -> None:
+    """Falling back to the primary subtag must not displace an exact regional track.
+
+    zh-TW and zh-CN differ in what is spoken, so a zh-TW source has to keep selecting its own
+    track when the refresh offers both.
+    """
+    from threading import Event
+
+    from video_content_capture.workspace.subtitles import acquire_subtitles
+    from video_content_capture.workspace.youtube import SourceMetadata, SubtitleTrack
+
+    source = SourceMetadata(
+        youtube_id="abcdefghijk",
+        source_url="https://youtube.com",
+        title="one",
+        duration=10,
+        formats=[],
+        audio_tracks=[],
+        subtitles=[
+            SubtitleTrack(language="zh-CN", automatic=False, extensions=["vtt"]),
+            SubtitleTrack(language="zh-TW", automatic=False, extensions=["vtt"]),
+        ],
+        default_format_id="v",
+        default_audio_id="a",
+        above_1080p=False,
+        original_language="zh-TW",
+    )
+
+    class Adapter:
+        def query(self, *args: object) -> SourceMetadata:
+            return source
+
+        def download_subtitle(self, source: object, track: SubtitleTrack, cancel: object) -> bytes:
+            return f"WEBVTT\n\n00:01.000 --> 00:02.000\n{track.language}".encode()
+
+    class ASR:
+        def transcribe(self, *args: object) -> object:
+            raise AssertionError("An exact regional track exists, so local recognition must not run")
+
+    language, kind, parsed = acquire_subtitles(
+        Adapter(), ASR(), source, tmp_path / "media", Event()
+    )
+    assert (language, kind) == ("zh-TW", "platform_manual")
+    assert parsed.cues[0].text == "zh-TW"
 
 
 def test_caption_list_failure_never_calls_asr(tmp_path: Path) -> None:

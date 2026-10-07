@@ -46,15 +46,20 @@ class FakeASR:
 class FlowAdapter(FakeAdapter):
     """FakeAdapter plus the original language and exactly one platform subtitle track."""
 
-    def __init__(self, language: str = "en", automatic: bool = False) -> None:
+    def __init__(
+        self, language: str = "en", automatic: bool = False, track_language: str | None = None
+    ) -> None:
         super().__init__()
+        # yt-dlp reports the original as a region tag (`en-US`) while YouTube keys the track
+        # by base language (`en`), so the two are not always the same string.
+        key = track_language or language
         self.source = parse_metadata(
             {
                 "id": "abcdefghijk",
                 "title": "離線影片",
                 "duration": 10,
                 "language": language,
-                "automatic_captions" if automatic else "subtitles": {language: [{"ext": "vtt"}]},
+                "automatic_captions" if automatic else "subtitles": {key: [{"ext": "vtt"}]},
                 "formats": [
                     {"format_id": "v", "height": 720, "vcodec": "avc1", "acodec": "none"},
                     {"format_id": "a", "vcodec": "none", "acodec": "mp4a"},
@@ -175,6 +180,26 @@ def test_confirm_reports_the_plan_labels_and_key_block(
         assert confirm(client, video["id"], target_language="zh-TW", height=2160).status_code == 400
         assert confirm(client, "missing-video").status_code == 404
         assert client.get("/api/flows/missing").status_code == 404
+
+
+def test_confirm_names_the_platform_track_for_a_region_tagged_original(tmp_path: Path) -> None:
+    """A region-tagged original must still announce the platform track it will actually use.
+
+    `_expected_original` matched the track language exactly, so an `en-US` source promised
+    「本機辨識」 even though the flow went on to download the `en` platform track.
+    """
+    adapter = FlowAdapter("en-US", track_language="en")
+    with TestClient(
+        create_app(load_settings(tmp_path), adapter, asr_adapter=FakeASR()),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        plan = confirm(client, video["id"], target_language="zh-TW").json()
+        assert plan["original_language"] == "en-US"
+        assert plan["original_source"] == "platform_manual"
+        assert plan["original_source_label"] == "人工"
 
 
 def test_regional_chinese_targets_are_different_languages(tmp_path: Path) -> None:
