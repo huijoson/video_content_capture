@@ -711,3 +711,56 @@
 - 修改清單：workspace storage/youtube/jobs/app、static index.html/workspace.js；新增
   subtitles.py/translation.py/exports.py；新增四份 S3測試；調整 storage/UI測試；
   pyproject.toml/uv.lock、README.md、tasks/todo.md/lessons.md。
+
+---
+
+## 2026-10-07 驗收 FB6oCmrIj-Y（Introducing the Decisions API）— 四個根因
+
+### Goal and acceptance criteria
+- 使用者指定 YouTube 影片，驗證轉檔成品（下載、字幕、翻譯、燒錄匯出）沒有問題。
+- 原 flow `681d18fa315c44fbb7d9c324da6f40a0` 四個階段全空、狀態 `failed`。
+
+### Results
+四個獨立根因，全部已修／已處置，flow 現為 `completed`，成品已驗證。
+
+1. **字幕語言標籤比對（程式 bug，已修；#15）**
+   - 影片 `original_language="en-US"`，平台軌為 `en`；精確比對失敗 → 誤退回本機 MLX ASR。
+   - 新增 `subtitles.matching_tracks()`：先精確比對（casefold），失敗才比主標籤。
+   - `flows._expected_original` 亦改用之。`flows.same_language` 刻意維持精確（zh-TW ≠ zh-CN）。
+   - 測試：`tests/test_workspace_subtitles.py`、`tests/test_workspace_flow_api.py` 各新增案例。
+
+2. **MLX ASR 尾端幻覺（程式 bug，已修；#16）**
+   - Whisper 產生 132 segments，116–131 為重複幻覺，其中 start=335.96 ≥ 影片長 334s。
+   - 只在 `MLXSubtitleAdapter.transcribe` 丟棄不可能時間（`end<=0`、`start>=duration`、
+     `start>=end`）的段落；共用 `validate_cues` 維持嚴格，不放寬既有契約。
+
+3. **全域 `GEMINI_API_KEY` 覆蓋 `.env`（環境問題，未改程式）**
+   - `~/.zshrc:196` 的無效金鑰（40 字元）優先於 `.env:29` 的有效金鑰（54 字元）。
+   - env 優先 `.env` 為**刻意設計**（`tests/test_workspace_config.py` 有測試保護），故不改程式；
+     驗收以 `env -u GEMINI_API_KEY` 啟動。使用者環境未擅自修改。
+
+4. **Gemini 翻譯於大塊內合併相鄰字幕片段（模型行為，已修；#17）**
+   - 症狀碼 `translation_ids` / `translation_empty`；機制是模型把相鄰的句中片段合併成一句，
+     被吸收的 cue 得到空字串，偶爾整段位移。
+   - 非確定性：`temperature=0` 仍失敗；同一塊重跑時好時壞。已排除提示詞強化與 `dict` schema。
+   - 量測（真實 181 cues，每塊 cue 數 → 失敗率）：100 → 3/4 塊失敗；50 → 1/8；20 → 0/40。
+   - 關鍵對照：**原始提示詞、size=20 → 0/4 支影片失敗**，證明大小才是主因，提示詞不是。
+   - 修法：`translation.BATCH_SIZE = 20`，`GeminiTranslationAdapter` 對外維持 `CHUNK_SIZE=100`
+     與 snapshot／checkpoint 契約不變，僅在 adapter 內部分批並合併；`validate_translation`
+     逐批把關，失敗即整塊失敗（fail closed）。
+   - 隱性風險：size=100 即使通過驗證，與 size=20 參考僅 26/100 cue 一致 → 舊行為會靜默污染譯文。
+
+### Verification
+- 新測試先紅後綠；`pytest`（排除 test_live_acceptance）**719 passed**、ruff／format／mypy 皆通過。
+- 端到端：flow `681d18fa…` 四階段全 `completed`，產出 artifact
+  `…-1d20f026258643ce8cbfa87252d4af3e.mp4`（303,216,359 bytes、333.94s、1280x720 h264+aac、
+  checksum 與 DB 一致）。
+- 字幕：zh-TW 181 cues、**0 空值**；與 size=20 參考對齊；先前會合併空白的 c000050–052
+  現在各自有獨立譯文。
+- 燒錄：export 與來源逐格比對，差異侷限在 rows 646–684（畫面 90–95% 處）、白色像素 3,730；
+  字幕空檔處差異為 0，確認字幕確實燒入且位置正確。
+
+### Follow-ups（未修，待決定）
+- 下載失敗（`source_unavailable`）時 stderr 被丟棄、無 log，且 `retries=0`，無法診斷；
+  本次首次失敗即為暫時性網路問題，手動重試成功。
+- 翻譯失敗後僅能以 retry 重跑整塊，無塊內重試；`BATCH_SIZE` 為模組常數，未進 snapshot。
