@@ -2,7 +2,7 @@
 
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -77,6 +77,27 @@ def validate_language(language: str) -> str:
     if language != "und" and _LANGUAGE.fullmatch(language) is None:
         raise ValueError("Invalid subtitle language")
     return language
+
+
+def _primary_subtag(language: str) -> str:
+    return language.split("-", maxsplit=1)[0].casefold()
+
+
+def matching_tracks(tracks: Sequence[SubtitleTrack], language: str | None) -> list[SubtitleTrack]:
+    """The tracks that carry `language`, exact tag first and the primary subtag only as a fallback.
+
+    yt-dlp reports the original as a region tag (`en-US`) while YouTube keys the caption track
+    by base language (`en`), so an exact comparison alone finds no candidate and the caller
+    silently falls back to local recognition on media that already has a platform transcript.
+    An exact tag always wins, so zh-TW never resolves to a zh-CN track that is also offered.
+    """
+    if language is None:
+        return []
+    exact = [track for track in tracks if track.language.casefold() == language.casefold()]
+    if exact:
+        return exact
+    primary = _primary_subtag(language)
+    return [track for track in tracks if _primary_subtag(track.language) == primary]
 
 
 def _duration_slack(duration: float) -> float:
@@ -276,14 +297,16 @@ class MLXSubtitleAdapter:
                 raise ValueError("Invalid local transcript")
             if not segment["text"].strip():
                 continue
-            cues.append(
-                Cue(
-                    id=f"c{index + 1:06d}",
-                    start=float(segment["start"]),
-                    end=float(segment["end"]),
-                    text=segment["text"],
-                )
-            )
+            start, end = float(segment["start"]), float(segment["end"])
+            if not (math.isfinite(start) and math.isfinite(end)):
+                raise ValueError("Invalid local transcript")
+            # Whisper repeats its closing line past the end of the media, and the repetition
+            # itself is the proof: nothing can be spoken after the audio stops. Drop those
+            # impossible segments here so the shared check stays strict for every other
+            # source instead of failing the whole acquisition on the last repeat.
+            if end <= 0 or start >= duration or start >= end:
+                continue
+            cues.append(Cue(id=f"c{index + 1:06d}", start=start, end=end, text=segment["text"]))
         detected = payload.get("language")
         result_language = detected if isinstance(detected, str) else language or "und"
         return validate_language(result_language), validate_cues(cues, duration).cues
@@ -306,8 +329,8 @@ def acquire_subtitles(
         selected = next(
             (
                 item
-                for item in refreshed.subtitles
-                if item.language == requested.language and item.automatic == requested.automatic
+                for item in matching_tracks(refreshed.subtitles, requested.language)
+                if item.automatic == requested.automatic
             ),
             None,
         )
@@ -319,7 +342,7 @@ def acquire_subtitles(
                 "source_language_unknown",
                 "Original language unknown; choose a platform subtitle track",
             )
-        candidates = [item for item in refreshed.subtitles if item.language == language]
+        candidates = matching_tracks(refreshed.subtitles, language)
         selected = next((item for item in candidates if not item.automatic), None)
         selected = selected or next(iter(candidates), None)
     if selected is not None:
@@ -406,9 +429,8 @@ class AcquisitionService:
                 track = next(
                     (
                         item
-                        for item in source.subtitles
-                        if item.language == snapshot["language"]
-                        and item.automatic == (snapshot["source_type"] == "platform_auto")
+                        for item in matching_tracks(source.subtitles, str(snapshot["language"]))
+                        if item.automatic == (snapshot["source_type"] == "platform_auto")
                     ),
                     None,
                 )

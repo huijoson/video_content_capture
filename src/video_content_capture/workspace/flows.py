@@ -21,7 +21,11 @@ from video_content_capture.workspace.quality import (
     resolve_source,
 )
 from video_content_capture.workspace.storage import Library, Record
-from video_content_capture.workspace.subtitles import AcquisitionService, validate_language
+from video_content_capture.workspace.subtitles import (
+    AcquisitionService,
+    matching_tracks,
+    validate_language,
+)
 from video_content_capture.workspace.translation import TranslationService
 from video_content_capture.workspace.youtube import SourceMetadata
 
@@ -230,7 +234,7 @@ class FlowService:
         if selected is not None:
             return str(self.library.get_subtitle_version(selected)["source_type"])
         language = source.original_language
-        tracks = [track for track in source.subtitles if track.language == language]
+        tracks = matching_tracks(source.subtitles, language)
         if language is not None and any(not track.automatic for track in tracks):
             return "platform_manual"
         if tracks:

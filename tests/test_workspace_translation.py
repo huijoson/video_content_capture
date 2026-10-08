@@ -185,6 +185,136 @@ def test_sdk_client_explicit_key_no_retry_count_before_generation(monkeypatch):
     assert observed[2][1]["config"].response_mime_type == "application/json"
 
 
+def batched_adapter(monkeypatch, respond):
+    """Monkeypatch the SDK and record one entry per generate_content call."""
+    import re
+    from types import SimpleNamespace
+
+    from video_content_capture.workspace.translation import GeminiTranslationAdapter
+
+    calls = []
+
+    class Models:
+        def count_tokens(self, **kwargs):
+            return SimpleNamespace(total_tokens=10)
+
+        def generate_content(self, **kwargs):
+            ids = re.findall(r'"id": "([^"]+)"', kwargs["contents"])
+            calls.append(ids)
+            return SimpleNamespace(
+                candidates=[SimpleNamespace(finish_reason=SimpleNamespace(value="STOP"))],
+                prompt_feedback=None,
+                text=respond(ids),
+            )
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.models = Models()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr("video_content_capture.workspace.translation.genai.Client", Client)
+    return GeminiTranslationAdapter(), calls
+
+
+def test_adapter_translates_in_bounded_batches_and_merges_every_id(monkeypatch):
+    import json as json_module
+
+    from pydantic import SecretStr
+
+    from video_content_capture.workspace.subtitles import Cue
+
+    adapter, calls = batched_adapter(
+        monkeypatch,
+        lambda ids: json_module.dumps({"cues": [{"id": i, "text": i} for i in ids]}),
+    )
+    cues = [Cue(id=f"c{i:03d}", start=i, end=i + 1, text="word") for i in range(45)]
+    response = adapter.translate(SecretStr("fake-key"), "model-fixed", "zh-TW", cues)
+    # A single oversized request makes the model merge neighbouring fragments.
+    assert [len(batch) for batch in calls] == [20, 20, 5]
+    assert response.finish_reason == "STOP"
+    merged = json_module.loads(response.text)
+    assert [cue["id"] for cue in merged["cues"]] == [cue.id for cue in cues]
+    assert all(cue["text"] == cue["id"] for cue in merged["cues"])
+
+
+def test_adapter_fails_closed_when_a_batch_blanks_a_merged_cue(monkeypatch):
+    import json as json_module
+
+    from pydantic import SecretStr
+
+    from video_content_capture.workspace.subtitles import Cue
+
+    def respond(ids):
+        # Mimics the model folding a fragment into its neighbour.
+        return json_module.dumps(
+            {"cues": [{"id": i, "text": "" if i == "c021" else i} for i in ids]}
+        )
+
+    adapter, calls = batched_adapter(monkeypatch, respond)
+    cues = [Cue(id=f"c{i:03d}", start=i, end=i + 1, text="word") for i in range(45)]
+    with pytest.raises(TranslationError) as error:
+        adapter.translate(SecretStr("fake-key"), "model-fixed", "zh-TW", cues)
+    assert "translation_empty" in str(error.value)
+    # Fails on the offending batch, so the later one is never requested.
+    assert [len(batch) for batch in calls] == [20, 20]
+
+
+def test_adapter_fails_closed_when_a_batch_drops_a_cue(monkeypatch):
+    import json as json_module
+
+    from pydantic import SecretStr
+
+    from video_content_capture.workspace.subtitles import Cue
+
+    def respond(ids):
+        # The absorbed cue never comes back at all.
+        return json_module.dumps({"cues": [{"id": i, "text": i} for i in ids if i != "c021"]})
+
+    adapter, _ = batched_adapter(monkeypatch, respond)
+    cues = [Cue(id=f"c{i:03d}", start=i, end=i + 1, text="word") for i in range(45)]
+    with pytest.raises(TranslationError) as error:
+        adapter.translate(SecretStr("fake-key"), "model-fixed", "zh-TW", cues)
+    assert "translation_ids" in str(error.value)
+
+
+def test_adapter_merges_reordered_batches_back_into_source_order(monkeypatch):
+    import json as json_module
+
+    from pydantic import SecretStr
+
+    from video_content_capture.workspace.subtitles import Cue
+
+    def respond(ids):
+        return json_module.dumps({"cues": [{"id": i, "text": i} for i in reversed(ids)]})
+
+    adapter, _ = batched_adapter(monkeypatch, respond)
+    cues = [Cue(id=f"c{i:03d}", start=i, end=i + 1, text="word") for i in range(25)]
+    response = adapter.translate(SecretStr("fake-key"), "model-fixed", "zh-TW", cues)
+    merged = json_module.loads(response.text)
+    assert [cue["id"] for cue in merged["cues"]] == [cue.id for cue in cues]
+
+
+def test_adapter_sends_batches_in_source_order(monkeypatch):
+    import json as json_module
+
+    from pydantic import SecretStr
+
+    from video_content_capture.workspace.subtitles import Cue
+
+    adapter, calls = batched_adapter(
+        monkeypatch,
+        lambda ids: json_module.dumps({"cues": [{"id": i, "text": i} for i in ids]}),
+    )
+    cues = [Cue(id=f"c{i:03d}", start=i, end=i + 1, text="word") for i in range(41)]
+    adapter.translate(SecretStr("fake-key"), "model-fixed", "zh-TW", cues)
+    assert calls[0][0] == "c000" and calls[1][0] == "c020" and calls[2][0] == "c040"
+
+
 @pytest.mark.parametrize(
     "text,finish",
     [
