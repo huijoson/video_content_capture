@@ -44,5 +44,27 @@ outputs/
 .superpowers/
 docs/checkpoints/
 
+# Impeccable: platform engine binary is fetched on demand into ~/.impeccable/bin/
+.github/skills/impeccable/scripts/bin/
+# Impeccable: ephemeral working files (shared artifacts stay tracked: config.json,
+# design.json, surfaces/*.md, critique/*.md)
+**/.impeccable/config.local.json
+**/.impeccable/hook.cache.json
+**/.impeccable/hook.pending.json
+**/.impeccable/*.png
+**/.impeccable/review/
+**/.impeccable/questions/
+**/.impeccable/live/server.json
+**/.impeccable/live/sessions/
+**/.impeccable/live/previews/
+**/.impeccable/live/annotations/
+**/.impeccable/live/cache/
+**/.impeccable/live/manual-edit-apply-transaction.json
+**/.impeccable/live/manual-edit-events.jsonl
+**/.impeccable/live/manual-edit-evidence/
+**/.impeccable/live/pending-manual-edits.json
+**/.impeccable/live/deferred-svelte-component-accepts.json
+**/.impeccable/live/*.png
+
 # OS
 .DS_Store
