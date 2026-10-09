@@ -840,8 +840,14 @@ class Library:
 
     def ensure_conversation(self, video_id: str) -> Record | None:
         video = self.get_video(video_id)
-        if video["last_conversation_id"]:
-            return self.get_conversation(str(video["last_conversation_id"]))
+        pointer = video["last_conversation_id"]
+        if pointer:
+            try:
+                return self.get_conversation(str(pointer))
+            except ValueError:
+                # A pointer whose conversation is gone must not brick the whole video;
+                # clear it and fall through to the recovery path below.
+                self._clear_conversation_pointer(video_id, str(pointer))
         # Explicitly deleting a conversation does not silently create another one.
         with self._connect() as connection:
             if connection.execute(
@@ -852,6 +858,43 @@ class Library:
             return self.create_conversation(video_id)
         except ValueError:
             return None
+
+    def _clear_conversation_pointer(self, video_id: str, conversation_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE videos SET last_conversation_id=NULL,qa_version_id=NULL "
+                "WHERE id=? AND last_conversation_id=?",
+                (video_id, conversation_id),
+            )
+
+    def translation_source_version(self, video_id: str) -> Record | None:
+        """The version this video pinned as its subtitle source, tolerating a stale pointer.
+
+        `videos.translation_source_version_id` can outlive its `subtitle_versions` row (a
+        purge that raced, or stale data from an older build). Callers that just want the
+        selection must see "nothing selected" instead of a `ValueError` — otherwise a
+        library video opens fine but its confirm screen answers 404. Only the source column
+        is cleared: `qa_version_id` is guarded by its own selection and may be live.
+        """
+        video = self.get_video(video_id)
+        selected = video["translation_source_version_id"]
+        if selected is None:
+            return None
+        try:
+            return self.get_subtitle_version(str(selected))
+        except ValueError:
+            self._clear_translation_source_pointer(video_id, str(selected))
+            return None
+
+    def _clear_translation_source_pointer(self, video_id: str, version_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE videos SET translation_source_version_id=NULL "
+                "WHERE id=? AND translation_source_version_id=?",
+                (video_id, version_id),
+            )
 
     def get_conversation(self, conversation_id: str) -> Record:
         with self._connect() as connection:
@@ -1106,6 +1149,13 @@ class Library:
                 connection.execute(
                     f"UPDATE videos SET {column}=NULL WHERE {column}=?", (version_id,)
                 )
+            # A tombstone this purge removes must not leave its video pointing at nothing.
+            connection.execute(
+                "UPDATE videos SET last_conversation_id=NULL,qa_version_id=NULL WHERE "
+                "last_conversation_id IN (SELECT id FROM conversations "
+                "WHERE source_version_id=? AND status='deleted')",
+                (version_id,),
+            )
             # Deleted conversation tombstones (messages already removed) no longer pin a source.
             connection.execute(
                 "DELETE FROM conversations WHERE source_version_id=? AND status='deleted'",
