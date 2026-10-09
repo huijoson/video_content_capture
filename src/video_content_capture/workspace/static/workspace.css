@@ -387,7 +387,7 @@ button[aria-pressed="true"] {
 }
 /* Folded blocks: the same ruled block, with its header line doubling as the handle.
    The caret is drawn from two borders — the 紅鉛筆 tick, not a character. */
-.panel > summary, .choices > summary {
+.panel > summary {
   display: grid;
   grid-template-columns: 1em minmax(0, 1fr) auto;
   align-items: baseline;
@@ -395,8 +395,8 @@ button[aria-pressed="true"] {
   cursor: pointer;
   list-style: none;
 }
-.panel > summary::-webkit-details-marker, .choices > summary::-webkit-details-marker { display: none; }
-.panel > summary:hover .panel-hint, .choices > summary:hover .panel-hint { color: var(--color-ink); }
+.panel > summary::-webkit-details-marker { display: none; }
+.panel > summary:hover .panel-hint { color: var(--color-ink); }
 /* The block's own heading sits in the summary, so it must not add a second margin. */
 .panel > summary > h3 { margin: 0; }
 .panel-caret {
@@ -408,7 +408,7 @@ button[aria-pressed="true"] {
   transform: rotate(45deg);
   transition: transform var(--duration-state) var(--ease-state);
 }
-.panel[open] > summary > .panel-caret, .choices[open] > summary > .panel-caret { transform: rotate(-135deg); }
+.panel[open] > summary > .panel-caret { transform: rotate(-135deg); }
 .panel-state, .panel-hint { color: var(--color-ink-muted); font-size: var(--font-size-small); text-align: right; }
 .panel-hint { white-space: nowrap; }
 /* The readback of the four flow choices: the resolution is a measurement, the rest is prose. */

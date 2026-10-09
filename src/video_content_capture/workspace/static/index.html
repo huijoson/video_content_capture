@@ -114,11 +114,12 @@
             aria-controls="qa-pane" tabindex="-1">問答</button>
         </div>
         <section id="subtitle-panels" aria-label="字幕版本、匯出與影片管理">
+        <button id="refresh-source" type="button">重新查詢來源格式</button>
         <form id="processing-form" class="card">
           <h3>開始處理</h3>
           <p id="flow-summary">尚未選取影片。</p>
           <p id="flow-blocked" class="notice" role="status" aria-live="polite" hidden></p>
-          <details id="flow-choices" class="choices" hidden>
+          <details id="flow-choices" class="choices panel" hidden>
             <summary>
               <span class="panel-caret" aria-hidden="true"></span>
               <span id="flow-choices-values"></span>
@@ -141,7 +142,6 @@
               <option value="tracks">可切換字幕軌</option>
             </select>
             <ul id="flow-facts" class="plain-list" aria-label="一鍵流程設定摘要"></ul>
-            <button id="refresh-source" type="button">重新查詢來源格式</button>
           </details>
           <p class="hint">按「開始處理」後會固定以上選擇，依序自動跑到成品；完成後可下載影片。</p>
           <button id="start-job" class="primary" type="submit">開始處理</button>

@@ -71,6 +71,7 @@ web
 
 ## Open Decisions
 
+- 網頁框架與儲存方案依 D8 採 FastAPI／Uvicorn＋SQLite，實作進行中。
 - Gemini 模型候選（`gemini-3.5-flash-lite` 翻譯／`gemini-3.8-flash` 問答）須以真實 key
   驗證權限、品質、延遲與 quota 後定案，查證依據見
   [Gemini API 查證](docs/design/gemini-api-notes.md)。

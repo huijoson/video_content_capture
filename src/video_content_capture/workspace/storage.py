@@ -868,6 +868,34 @@ class Library:
                 (video_id, conversation_id),
             )
 
+    def translation_source_version(self, video_id: str) -> Record | None:
+        """The version this video pinned as its subtitle source, tolerating a stale pointer.
+
+        `videos.translation_source_version_id` can outlive its `subtitle_versions` row (a
+        purge that raced, or stale data from an older build). Callers that just want the
+        selection must see "nothing selected" instead of a `ValueError` — otherwise a
+        library video opens fine but its confirm screen answers 404. Only the source column
+        is cleared: `qa_version_id` is guarded by its own selection and may be live.
+        """
+        video = self.get_video(video_id)
+        selected = video["translation_source_version_id"]
+        if selected is None:
+            return None
+        try:
+            return self.get_subtitle_version(str(selected))
+        except ValueError:
+            self._clear_translation_source_pointer(video_id, str(selected))
+            return None
+
+    def _clear_translation_source_pointer(self, video_id: str, version_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE videos SET translation_source_version_id=NULL "
+                "WHERE id=? AND translation_source_version_id=?",
+                (video_id, version_id),
+            )
+
     def get_conversation(self, conversation_id: str) -> Record:
         with self._connect() as connection:
             return self._record(

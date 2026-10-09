@@ -23,9 +23,13 @@ function formatDuration(seconds) {
 }
 // Cue times keep tenths, matching the cue sheet the reader is checking against.
 function formatCue(seconds) {
-  const value = Math.max(0, seconds);
-  const rest = value % 60;
-  return `${pad2(Math.floor(value / 3600))}:${pad2(Math.floor(value / 60 % 60))}:${rest < 10 ? "0" : ""}${rest.toFixed(1)}`;
+  if (seconds == null || !Number.isFinite(seconds)) return "--:--:--.-";
+  // Round to tenths before splitting, otherwise 59.95 rounds up into a 60th second.
+  const tenths = Math.max(0, Math.round(seconds * 10));
+  const hours = Math.floor(tenths / 36000);
+  const minutes = Math.floor(tenths / 600 % 60);
+  const rest = tenths % 600;
+  return `${pad2(hours)}:${pad2(minutes)}:${pad2(Math.floor(rest / 10))}.${rest % 10}`;
 }
 const activeStatuses = new Set(["queued", "running"]);
 const statusLabels = {
@@ -213,7 +217,6 @@ for (const [name, id] of Object.entries(panelNames)) {
 
 /* Version register: four ruled columns answering 「這支影片由什麼組成、做到哪」.
    It never opens a panel and never invents data the page does not already hold. */
-const registryFields = ["source", "original", "target", "artifact"];
 let registrySettled = false;
 
 function appendSegments(host, segments) {
@@ -262,11 +265,6 @@ function registryMark(field) {
   const registry = element("registry");
   if (field) registry.dataset.current = field;
   else delete registry.dataset.current;
-  for (const name of registryFields) {
-    const host = registry.querySelector(`[data-field="${name}"]`);
-    if (name === field) host.dataset.current = "true";
-    else delete host.dataset.current;
-  }
 }
 function registrySource(video) {
   if (!video) return [{ text: "尚未載入影片", note: true }];
@@ -997,7 +995,14 @@ async function refresh() {
     await pollJobs(); await pollConversation();
     if (currentVideo && !flowConfirming) await refreshFlow().catch(() => {});
   }
-  catch { element("job-status").textContent = "工作狀態暫時無法更新，請確認本機服務仍在執行。"; }
+  catch {
+    // Repaint through the drawn mark and remember it, so the next good poll announces again.
+    const offline = "工作狀態暫時無法更新，請確認本機服務仍在執行。";
+    if (lastAnnouncement !== offline) {
+      lastAnnouncement = offline;
+      element("job-status").replaceChildren(statusNode("info", offline));
+    }
+  }
   setTimeout(refresh, 1500);
 }
 loadStatus();
@@ -1018,8 +1023,7 @@ function updateTranslationButtons() {
 }
 
 function subtitleLabel(version) {
-  const sources = { platform_manual: "平台人工", platform_auto: "平台自動", asr: "本機辨識", import: "匯入", translation: "翻譯" };
-  return `${version.language} · ${sources[version.source_type] || version.source_type} · ${version.name} · ${version.complete ? "完整" : "未完成"} · ${version.id.slice(0, 8)}`;
+  return `${version.language} · ${sourceTypeLabels[version.source_type] || version.source_type} · ${version.name} · ${version.complete ? "完整" : "未完成"} · ${version.id.slice(0, 8)}`;
 }
 
 function applyPlaybackSubtitle(video) {
