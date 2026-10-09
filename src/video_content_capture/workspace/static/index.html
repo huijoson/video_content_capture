@@ -17,9 +17,6 @@
       <h1>YouTube 影片工作區</h1>
       <p id="service-status" class="status-line" role="status">正在讀取服務狀態…</p>
     </div>
-    <p id="gemini-help" class="notice"><span class="icon" aria-hidden="true">ⓘ</span>
-      Gemini 未設定：翻譯與問答需要在專案根目錄 <code>.env</code> 設定
-      <code>GEMINI_API_KEY</code>，儲存後重新啟動服務生效。字幕、播放與匯出不受影響。</p>
     <form id="import-form" class="import-form">
       <label for="youtube-url">YouTube 影片網址</label>
       <div class="url-row">
@@ -30,6 +27,31 @@
       </div>
       <p id="import-help" class="hint">每次載入一支影片，查詢後只需選擇解析度；按開始處理才下載。</p>
     </form>
+    <p id="gemini-help" class="notice"><span class="mark" data-mark="info" aria-hidden="true"></span>
+      Gemini 未設定：翻譯與問答需要在專案根目錄 <code>.env</code> 設定
+      <code>GEMINI_API_KEY</code>，儲存後重新啟動服務生效。字幕、播放與匯出不受影響。</p>
+    <section id="registry" class="registry" aria-labelledby="registry-heading">
+      <h2 id="registry-heading" class="visually-hidden">版本登錄</h2>
+      <dl class="registry-fields">
+        <div class="registry-field" data-field="source">
+          <dt>來源影音</dt>
+          <dd id="registry-source"><span class="note">尚未載入影片</span></dd>
+        </div>
+        <div class="registry-field" data-field="original">
+          <dt>原文字幕</dt>
+          <dd id="registry-original"><span class="note">尚無版本</span></dd>
+        </div>
+        <div class="registry-field" data-field="target">
+          <dt>目標字幕</dt>
+          <dd id="registry-target"><span class="note">尚無版本</span></dd>
+        </div>
+        <div class="registry-field" data-field="artifact">
+          <dt>成品</dt>
+          <dd id="registry-artifact"><span class="note">尚未匯出</span></dd>
+        </div>
+      </dl>
+      <span id="registry-mark" class="registry-mark instant" aria-hidden="true"></span>
+    </section>
   </header>
   <main id="workspace" class="workspace" tabindex="-1" data-narrow-tab="subtitles">
     <section class="pane library" aria-labelledby="library-heading" data-collapsed="false">
@@ -50,7 +72,7 @@
       </div>
       <ul id="video-list" class="video-list"></ul>
       <section id="pending-section" class="pending" aria-labelledby="pending-heading" hidden>
-        <h3 id="pending-heading"><span class="icon" aria-hidden="true">⚠</span> 待清理</h3>
+        <h3 id="pending-heading"><span class="mark" data-mark="failed" aria-hidden="true"></span> 待清理</h3>
         <p class="hint">刪除未完成的影片已從影片庫隱藏，不能開啟或重新匯入；請按「重試刪除」完成清理。</p>
         <ul id="pending-deletions"></ul>
       </section>
@@ -69,8 +91,18 @@
         </div>
         <video id="player" controls preload="metadata" hidden aria-label="影片播放器"></video>
         <div id="player-placeholder" class="player-empty" hidden>
+          <span class="worksheet" aria-hidden="true"></span>
+          <span class="reticle" aria-hidden="true"></span>
           <p id="playback-help"></p>
         </div>
+        <p id="cue-line" class="cue-line" data-state="idle">
+          <span class="cue-edge">IN</span>
+          <span id="cue-in" class="cue-time">--:--:--.-</span>
+          <span class="cue-arrow" aria-hidden="true"></span>
+          <span id="cue-out" class="cue-time">--:--:--.-</span>
+          <span class="cue-edge">OUT</span>
+          <span id="cue-state" class="cue-state">播放字幕：未選擇</span>
+        </p>
         <div id="preview-panel" class="callout" hidden>
           <p id="preview-status" role="status" aria-live="polite"></p>
           <button id="make-preview" type="button">製作相容預覽</button>
@@ -81,29 +113,36 @@
           <button id="tab-qa" type="button" role="tab" aria-selected="false"
             aria-controls="qa-pane" tabindex="-1">問答</button>
         </div>
-        <div id="subtitle-panels">
-        <button id="refresh-source" type="button">重新查詢來源格式</button>
+        <section id="subtitle-panels" aria-label="字幕版本、匯出與影片管理">
         <form id="processing-form" class="card">
           <h3>開始處理</h3>
           <p id="flow-summary">尚未選取影片。</p>
           <p id="flow-blocked" class="notice" role="status" aria-live="polite" hidden></p>
-          <label for="resolution">解析度</label>
-          <select id="resolution" aria-describedby="quality-help resolved-source" required></select>
-          <p id="quality-help" class="hint"></p>
-          <p id="resolved-source" class="hint" role="status" aria-live="polite"></p>
-          <p id="audio-summary"></p>
-          <p id="audio-help" class="hint"></p>
-          <label for="flow-language">目標語系（一次一個）</label>
-          <select id="flow-language" aria-describedby="flow-facts"></select>
-          <label class="check" for="flow-include-original">
-            <input id="flow-include-original" type="checkbox">
-            原文＋目標（雙語字幕）</label>
-          <label for="flow-subtitle-form">字幕形式</label>
-          <select id="flow-subtitle-form" aria-describedby="flow-facts">
-            <option value="burned" selected>燒錄字幕（預設）</option>
-            <option value="tracks">可切換字幕軌</option>
-          </select>
-          <ul id="flow-facts" class="plain-list" aria-label="一鍵流程設定摘要"></ul>
+          <details id="flow-choices" class="choices" hidden>
+            <summary>
+              <span class="panel-caret" aria-hidden="true"></span>
+              <span id="flow-choices-values"></span>
+              <span class="panel-hint">調整</span>
+            </summary>
+            <label for="resolution">解析度</label>
+            <select id="resolution" aria-describedby="quality-help resolved-source" required></select>
+            <p id="quality-help" class="hint"></p>
+            <p id="resolved-source" class="hint" role="status" aria-live="polite"></p>
+            <p id="audio-summary"></p>
+            <p id="audio-help" class="hint"></p>
+            <label for="flow-language">目標語系（一次一個）</label>
+            <select id="flow-language" aria-describedby="flow-facts"></select>
+            <label class="check" for="flow-include-original">
+              <input id="flow-include-original" type="checkbox">
+              原文＋目標（雙語字幕）</label>
+            <label for="flow-subtitle-form">字幕形式</label>
+            <select id="flow-subtitle-form" aria-describedby="flow-facts">
+              <option value="burned" selected>燒錄字幕（預設）</option>
+              <option value="tracks">可切換字幕軌</option>
+            </select>
+            <ul id="flow-facts" class="plain-list" aria-label="一鍵流程設定摘要"></ul>
+            <button id="refresh-source" type="button">重新查詢來源格式</button>
+          </details>
           <p class="hint">按「開始處理」後會固定以上選擇，依序自動跑到成品；完成後可下載影片。</p>
           <button id="start-job" class="primary" type="submit">開始處理</button>
         </form>
@@ -117,8 +156,12 @@
           </div>
           <p id="flow-artifact"></p>
         </section>
-        <section class="card" aria-labelledby="subtitles-heading">
-          <h3 id="subtitles-heading">字幕版本</h3>
+        <details id="subtitles-panel" class="card panel">
+          <summary>
+            <span class="panel-caret" aria-hidden="true"></span>
+            <h3 id="subtitles-heading">字幕版本</h3>
+            <span id="subtitles-count" class="panel-state">尚無版本</span>
+          </summary>
           <button id="acquire-subtitles" type="button">取得原文字幕</button>
           <label for="platform-subtitle">平台字幕（人工／自動）</label>
           <select id="platform-subtitle"></select>
@@ -147,9 +190,13 @@
               <button id="retranslate" type="button" disabled aria-describedby="gemini-help">重新翻譯（新版本）</button>
             </div>
           </div>
-        </section>
-        <section class="card" aria-labelledby="export-heading">
-          <h3 id="export-heading">匯出影片</h3>
+        </details>
+        <details id="export-panel" class="card panel">
+          <summary>
+            <span class="panel-caret" aria-hidden="true"></span>
+            <h3 id="export-heading">匯出影片</h3>
+            <span id="export-count" class="panel-state">尚無成品</span>
+          </summary>
           <label for="export-target">匯出目標字幕版本</label>
           <select id="export-target"></select>
           <label for="export-form">字幕形式</label>
@@ -163,22 +210,28 @@
           <p id="export-summary" role="status" aria-live="polite">先選擇影音與字幕。</p>
           <button id="export-start" class="primary" type="button" disabled>依此摘要匯出影片</button>
           <ul id="export-list" class="plain-list"></ul>
-        </section>
-        <section class="card" aria-labelledby="manage-heading">
-          <h3 id="manage-heading">影片管理</h3>
+        </details>
+        <details id="manage-panel" class="card panel">
+          <summary>
+            <span class="panel-caret" aria-hidden="true"></span>
+            <h3 id="manage-heading">影片管理</h3>
+          </summary>
           <p class="hint">清除預覽只刪除可重建的相容預覽，不動字幕、對話、來源與成品。</p>
           <button id="clear-preview" type="button" disabled>清除預覽</button>
           <p class="hint">刪除整支影片會先列出範圍並要求再次確認；影片庫外另存的檔案不受影響。</p>
           <button id="delete-video" class="danger" type="button">刪除整支影片…</button>
+        </details>
         </section>
-        </div>
       </div>
-      <section class="card" aria-labelledby="jobs-heading">
-        <h3 id="jobs-heading">處理工作</h3>
-        <p id="job-status" role="status" aria-live="polite">尚無處理工作</p>
+      <details id="jobs-panel" class="card panel">
+        <summary>
+          <span class="panel-caret" aria-hidden="true"></span>
+          <h3 id="jobs-heading">處理工作</h3>
+          <span id="job-status" class="panel-state" role="status" aria-live="polite">尚無處理工作</span>
+        </summary>
         <progress id="job-progress" max="1" hidden aria-label="目前階段進度"></progress>
         <ul id="job-list" class="plain-list"></ul>
-      </section>
+      </details>
     </section>
     <section id="qa-pane" class="pane qa" aria-labelledby="qa-heading">
       <h2 id="qa-heading">影片問答</h2>

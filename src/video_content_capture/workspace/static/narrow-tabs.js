@@ -55,7 +55,10 @@
     const link = event.target.closest?.('a[href^="#"]');
     if (!link) return;
     const target = document.querySelector(link.getAttribute("href"));
-    if (target && element("subtitle-panels").contains(target)) selectNarrowTab(narrowTabs[0]);
+    if (!target) return;
+    const panel = target.closest("details");
+    if (panel) panel.open = true;
+    if (element("subtitle-panels").contains(target)) selectNarrowTab(narrowTabs[0]);
   });
   element("library-toggle").addEventListener("click", () => {
     setLibraryCollapsed(document.querySelector(".library").dataset.collapsed !== "true");

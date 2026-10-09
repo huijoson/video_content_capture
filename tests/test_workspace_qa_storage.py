@@ -114,3 +114,47 @@ def test_deleted_conversation_no_longer_pins_its_source_version(tmp_path: Path) 
     with pytest.raises(ValueError, match="referenced"):
         library.delete_subtitle_version(str(kept["id"]))
     assert library.get_video(video)["last_conversation_id"] == active["id"]
+
+
+def test_dangling_conversation_pointer_does_not_brick_the_video(tmp_path: Path) -> None:
+    library, video, source = setup_library(tmp_path)
+    conversation = library.create_conversation(video, source)
+    # A pointer whose row is gone (a database cleaned up mid-purge, or an older build)
+    # must not turn the whole video into a 404.
+    with library._connect() as connection:
+        connection.execute(
+            "UPDATE videos SET last_conversation_id=?,qa_version_id=? WHERE id=?",
+            ("0" * 32, "0" * 32, video),
+        )
+    assert library.ensure_conversation(video) is None
+    assert library.get_video(video)["last_conversation_id"] is None
+    assert library.get_video(video)["qa_version_id"] is None
+    assert library.get_video(video)["id"] == video
+    assert library.get_conversation(str(conversation["id"]))["id"] == conversation["id"]
+
+
+def test_ensure_conversation_still_reuses_a_live_pointer(tmp_path: Path) -> None:
+    library, video, source = setup_library(tmp_path)
+    conversation = library.create_conversation(video, source)
+    assert library.ensure_conversation(video)["id"] == conversation["id"]
+    # An explicitly emptied video stays empty rather than silently gaining a conversation.
+    library.delete_conversation(str(conversation["id"]))
+    assert library.ensure_conversation(video) is None
+    assert library.get_video(video)["last_conversation_id"] is None
+
+
+def test_video_without_any_subtitles_still_opens_when_the_pointer_is_dangling(
+    tmp_path: Path,
+) -> None:
+    library = Library(tmp_path)
+    library.initialize()
+    video = library.import_video("abcdefghijk", "video", 10, "https://youtube.com", "{}")
+    video_id = str(video["id"])
+    with library._connect() as connection:
+        connection.execute(
+            "UPDATE videos SET last_conversation_id=?,qa_version_id=? WHERE id=?",
+            ("0" * 32, "0" * 32, video_id),
+        )
+    # No subtitle version exists, so recovery cannot create a conversation either.
+    assert library.ensure_conversation(video_id) is None
+    assert library.get_video(video_id)["last_conversation_id"] is None

@@ -8,16 +8,44 @@ const languageNames = {
   es: "西班牙文", fr: "法文", de: "德文",
 };
 const languageLabel = (id) => (languageNames[id] ? `${languageNames[id]}（${id}）` : id);
+const sourceTypeLabels = {
+  platform_manual: "平台人工", platform_auto: "平台自動", asr: "本機辨識",
+  import: "匯入", translation: "翻譯",
+};
+const pad2 = (value) => String(value).padStart(2, "0");
+// Timecodes and durations are measurements: fixed width, seconds rounded, never 「未知」 as a number.
+function formatDuration(seconds) {
+  if (seconds == null || !Number.isFinite(seconds)) return "未知";
+  const whole = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor(whole / 60 % 60);
+  return hours ? `${hours}:${pad2(minutes)}:${pad2(whole % 60)}` : `${minutes}:${pad2(whole % 60)}`;
+}
+// Cue times keep tenths, matching the cue sheet the reader is checking against.
+function formatCue(seconds) {
+  const value = Math.max(0, seconds);
+  const rest = value % 60;
+  return `${pad2(Math.floor(value / 3600))}:${pad2(Math.floor(value / 60 % 60))}:${rest < 10 ? "0" : ""}${rest.toFixed(1)}`;
+}
 const activeStatuses = new Set(["queued", "running"]);
 const statusLabels = {
-  queued: "排隊中", running: "處理中", completed: "已完成", failed: "失敗",
+  pending: "待處理", queued: "排隊中", running: "處理中", completed: "已完成", failed: "失敗",
   cancelled: "已取消", interrupted: "已中斷",
 };
-// Status always pairs a text label with a glyph; color is never the only signal.
+// Every status pairs a text label with a drawn mark; color is never the only signal.
+// The map names the shape to draw, and CSS authors that shape — no glyphs on the page.
 const statusIcons = {
-  queued: "⏳", running: "⟳", completed: "✓", failed: "⚠",
-  cancelled: "✕", interrupted: "⏸", info: "ⓘ",
+  pending: "pending", queued: "queued", running: "running", completed: "completed", failed: "failed",
+  cancelled: "cancelled", interrupted: "interrupted", info: "info",
 };
+
+function statusMark(status) {
+  const mark = document.createElement("span");
+  mark.className = "mark";
+  mark.dataset.mark = statusIcons[status] || "info";
+  mark.setAttribute("aria-hidden", "true");
+  return mark;
+}
 const errorLabels = {
   preview_failed: "相容預覽製作失敗；字幕、問答與成品下載仍可使用，已保留來源，可手動重試。",
   preview_not_needed: "此影音可直接播放，不需要相容預覽。",
@@ -59,6 +87,7 @@ const stageLabels = {
 };
 let currentVideo = null;
 let jobs = [];
+let lastAnnouncement = "";
 let opening = 0;
 let savingPosition = false;
 let lastPosition = -1;
@@ -121,12 +150,231 @@ async function request(path, method = "GET", body, signal) {
 
 function statusNode(status, text) {
   const node = document.createElement("span");
-  const icon = document.createElement("span");
-  icon.className = "icon";
-  icon.setAttribute("aria-hidden", "true");
-  icon.textContent = statusIcons[status] || "•";
-  node.append(icon, ` ${text}`);
+  node.append(statusMark(status), ` ${text}`);
   return node;
+}
+
+/* Folded panels: the header line stays on the sheet and the body unfolds under it. Each
+   video remembers which panels its reader folded, so a choice made once stays made. */
+const panelNames = {
+  choices: "flow-choices", subtitles: "subtitles-panel", export: "export-panel",
+  manage: "manage-panel", jobs: "jobs-panel",
+};
+let panelOwner = null;
+let panelState = {};
+
+const panelStorageKey = (videoId) => `vcc.panels.v1:${videoId}`;
+
+function panelDefault(name) {
+  if (name !== "jobs") return false;
+  // Work in progress is the one thing the reader must not have to go looking for; a
+  // finished ledger is history and stays folded.
+  const visible = currentVideo ? jobs.filter((job) => job.video_id === currentVideo.id) : jobs;
+  return visible.some((job) => activeStatuses.has(job.status));
+}
+
+function panelIntended(name) {
+  return typeof panelState[name] === "boolean" ? panelState[name] : panelDefault(name);
+}
+
+function setPanel(name, open) {
+  panelState[name] = open;
+  if (!panelOwner) return;
+  try { localStorage.setItem(panelStorageKey(panelOwner), JSON.stringify(panelState)); }
+  catch { /* A blocked store only costs the remembered fold. */ }
+}
+
+function applyPanels() {
+  const owner = currentVideo?.id || null;
+  if (owner !== panelOwner) {
+    panelOwner = owner;
+    panelState = {};
+    if (owner) {
+      try { panelState = JSON.parse(localStorage.getItem(panelStorageKey(owner)) || "{}") || {}; }
+      catch { panelState = {}; }
+    }
+  }
+  for (const [name, id] of Object.entries(panelNames)) {
+    const node = element(id);
+    // The choices line is the one panel that only exists once there is a video to read.
+    node.hidden = name === "choices" && !currentVideo;
+    const open = panelIntended(name);
+    if (node.open !== open) node.open = open;
+  }
+}
+
+// Programmatic folding also fires the toggle event, so only a state the reader moved is kept.
+for (const [name, id] of Object.entries(panelNames)) {
+  element(id).addEventListener("toggle", () => {
+    if (element(id).open === panelIntended(name)) return;
+    setPanel(name, element(id).open);
+  });
+}
+
+/* Version register: four ruled columns answering 「這支影片由什麼組成、做到哪」.
+   It never opens a panel and never invents data the page does not already hold. */
+const registryFields = ["source", "original", "target", "artifact"];
+let registrySettled = false;
+
+function appendSegments(host, segments) {
+  host.replaceChildren();
+  for (const segment of segments) {
+    if (segment.gap) host.append(document.createTextNode(segment.gap));
+    const node = document.createElement("span");
+    if (segment.figures) node.className = "num";
+    else if (segment.note) node.className = "note";
+    node.textContent = segment.text;
+    host.append(node);
+  }
+}
+
+function registryField(field, segments) {
+  appendSegments(element(`registry-${field}`), segments);
+}
+
+// The four flow choices read back as one measured line above the primary action, so the
+// common case — take every default — needs no interaction at all.
+let flowChoicesSignature = "";
+
+function renderFlowChoicesLine() {
+  const height = element("resolution").value;
+  const language = element("flow-language").value;
+  const form = element("flow-subtitle-form").value === "tracks" ? "可切換字幕軌" : "燒錄字幕";
+  const bilingual = element("flow-include-original").checked;
+  const signature = [currentVideo?.id || "", height, language, bilingual, form].join("|");
+  if (signature === flowChoicesSignature) return;
+  flowChoicesSignature = signature;
+  appendSegments(element("flow-choices-values"), [
+    height ? { text: `${height}p`, figures: true } : { text: "解析度未選", note: true },
+    { text: language ? languageLabel(language) : "未選目標語系", note: !language, gap: " · " },
+    { text: bilingual ? "雙語" : "單語", gap: " · " },
+    { text: form, gap: " · " },
+  ]);
+}
+
+// One mark for the whole register: it sits on the column where the work currently stands.
+// Its only motion is the slide between columns, once the page has painted.
+function registryMark(field) {
+  if (!registrySettled) {
+    registrySettled = true;
+    requestAnimationFrame(() => element("registry-mark").classList.remove("instant"));
+  }
+  const registry = element("registry");
+  if (field) registry.dataset.current = field;
+  else delete registry.dataset.current;
+  for (const name of registryFields) {
+    const host = registry.querySelector(`[data-field="${name}"]`);
+    if (name === field) host.dataset.current = "true";
+    else delete host.dataset.current;
+  }
+}
+function registrySource(video) {
+  if (!video) return [{ text: "尚未載入影片", note: true }];
+  const height = element("resolution").value;
+  const duration = formatDuration(video.duration);
+  return [
+    { text: height ? `${height}p` : "解析度未選", figures: Boolean(height), note: !height },
+    { text: duration, figures: duration !== "未知", note: duration === "未知", gap: " · " },
+  ];
+}
+
+function registryOriginal(video) {
+  const versions = video?.subtitles || [];
+  const chosen = versions.find((version) => version.id === video.translation_source_version_id) ||
+    versions.find((version) => version.source_type !== "translation") || versions[0];
+  if (!chosen) return [{ text: "尚無版本", note: true }];
+  return [
+    { text: chosen.language, figures: true },
+    { text: sourceTypeLabels[chosen.source_type] || chosen.source_type, gap: " · " },
+    { text: chosen.complete ? "完整" : "未完成", gap: " · ", note: !chosen.complete },
+  ];
+}
+
+function registryTarget(video) {
+  const language = element("flow-language").value;
+  const versions = (video?.subtitles || []).filter((version) => version.source_type === "translation");
+  const chosen = versions.find((version) => version.id === video.export_version_id) || versions[versions.length - 1];
+  if (!chosen && !language) return [{ text: "尚無版本", note: true }];
+  const bilingual = element("flow-include-original").checked || element("include-original").checked;
+  return [
+    { text: chosen ? chosen.language : language, figures: true },
+    { text: bilingual ? "雙語" : "單語", gap: " · " },
+    {
+      text: chosen ? (chosen.complete ? "完整" : "未完成") : "尚未翻譯",
+      gap: " · ",
+      note: !chosen?.complete,
+    },
+  ];
+}
+
+function registryArtifact(video) {
+  const artifacts = video?.exports || [];
+  const latest = artifacts[artifacts.length - 1];
+  if (latest) {
+    return [
+      { text: latest.subtitle_form === "burned" ? "燒錄字幕" : "字幕軌" },
+      { text: latest.container.toUpperCase(), gap: " · " },
+      { text: latest.id.slice(0, 8), figures: true, gap: " · " },
+    ];
+  }
+  const artifact = flowStatus?.artifact;
+  if (artifact) {
+    return [
+      { text: "成品就緒" },
+      { text: artifact.id.slice(0, 8), figures: true, gap: " · " },
+    ];
+  }
+  return [{ text: "尚未匯出", note: true }];
+}
+
+function registryCurrent(video) {
+  if (!video) return null;
+  if ((video.exports || []).length || flowStatus?.artifact) return "artifact";
+  if ((video.subtitles || []).some((version) => version.source_type === "translation" && version.complete)) return "target";
+  if ((video.subtitles || []).length) return "original";
+  if ((video.assets || []).length) return "source";
+  return null;
+}
+
+function renderRegistry() {
+  registryField("source", registrySource(currentVideo));
+  registryField("original", registryOriginal(currentVideo));
+  registryField("target", registryTarget(currentVideo));
+  registryField("artifact", registryArtifact(currentVideo));
+  registryMark(registryCurrent(currentVideo));
+}
+
+/* Playing cue: the same VTT track that renders over the video, read out as IN and OUT. */
+function activeCue(track) {
+  const player = element("player");
+  const cues = track?.cues;
+  if (!cues) return null;
+  for (let index = 0; index < cues.length; index += 1) {
+    const cue = cues[index];
+    if (cue.startTime <= player.currentTime && player.currentTime < cue.endTime) return cue;
+  }
+  return null;
+}
+
+function setCue(state, text, start, end) {
+  const line = element("cue-line");
+  line.dataset.state = state;
+  element("cue-state").textContent = text;
+  element("cue-in").textContent = start == null ? "--:--:--.-" : formatCue(start);
+  element("cue-out").textContent = end == null ? "--:--:--.-" : formatCue(end);
+}
+
+function renderCue() {
+  const player = element("player");
+  const version = (currentVideo?.subtitles || []).find((item) => item.id === currentVideo.playback_version_id);
+  if (!version) { setCue("idle", "播放字幕：未選擇"); return; }
+  if (player.hidden) { setCue("off", `播放字幕：${version.language} · 目前不能跳播`); return; }
+  const track = [...player.querySelectorAll("track")]
+    .map((node) => node.track).find((item) => item && item.mode === "showing");
+  if (!track) { setCue("off", `播放字幕：${version.language} · 尚未載入`); return; }
+  const cue = activeCue(track);
+  if (!cue) { setCue("none", `播放字幕：${version.language} · 本段無字幕`); return; }
+  setCue("live", `播放字幕：${version.language}`, cue.startTime, cue.endTime);
 }
 
 function snapshotOf(job) {
@@ -171,7 +419,8 @@ function renderLibrary() {
     title.textContent = video.title;
     const meta = document.createElement("span");
     meta.className = "hint";
-    meta.textContent = `${video.duration == null ? "時長未知" : `${Math.round(video.duration)} 秒`} · 位置 ${Math.round(video.position || 0)} 秒`;
+    const length = video.duration == null ? "時長未知" : formatDuration(video.duration);
+    meta.textContent = `${length} · 位置 ${formatDuration(video.position || 0)}`;
     button.append(title, meta);
     button.setAttribute("aria-current", String(currentVideo?.id === video.id));
     button.addEventListener("click", () => openVideo(video.id).catch(showError));
@@ -241,7 +490,7 @@ function renderVideo(video, preserveSelection = false) {
   options(element("flow-language"), flowLanguageChoices(video), element("flow-language").value, (entry) => entry.label);
   element("video-details").hidden = false;
   element("video-title").textContent = video.title;
-  element("video-source").textContent = `時長：${video.duration == null ? "未知" : `${Math.round(video.duration)} 秒`} · YouTube`;
+  element("video-source").textContent = `時長：${formatDuration(video.duration)} · YouTube`;
   const metadata = video.metadata || {};
   const resolutions = (metadata.resolutions || []).map((entry) => ({ ...entry, id: String(entry.height) }));
   const keptHeight = resolutions.some((entry) => entry.height === selectedHeight) ? selectedHeight : metadata.default_resolution;
@@ -272,6 +521,9 @@ function renderVideo(video, preserveSelection = false) {
   renderPlayback(video);
   renderLibrary();
   renderSubtitles(video, preserveSelection && sameVideo);
+  renderRegistry();
+  renderFlowChoicesLine();
+  applyPanels();
   updateStartButton();
   loadConversations(video.id).catch(showQaError);
 }
@@ -283,6 +535,7 @@ function renderResolvedSource() {
   element("resolved-source").textContent = resolved
     ? `可切換字幕軌成品：${resolved.output_container.toUpperCase()}（${resolved.height}p · ${resolved.fps || "未知"} FPS · ${codecLabels[resolved.video_codec] || resolved.video_codec}＋${codecLabels[resolved.audio_codec] || resolved.audio_codec}）。系統自動選擇來源版本。`
     : "";
+  renderRegistry();
 }
 
 function stopPlayer(message) {
@@ -295,6 +548,7 @@ function stopPlayer(message) {
   activeAsset = null;
   element("player-placeholder").hidden = false;
   element("playback-help").textContent = message;
+  renderCue();
 }
 
 function playbackSource(video) {
@@ -319,6 +573,7 @@ function renderPlayback(video) {
   }
   player.hidden = false;
   element("player-placeholder").hidden = true;
+  renderCue();
   if (activeAsset !== source.key) {
     playbackVideoId = null;
     activeAsset = source.key;
@@ -407,7 +662,7 @@ function renderFlowFacts() {
   const form = element("flow-subtitle-form").value;
   const entries = [
     `標題：${flowConfirm.title}`,
-    `時長：${flowConfirm.duration == null ? "未知" : `${Math.round(flowConfirm.duration)} 秒`}`,
+    `時長：${formatDuration(flowConfirm.duration)}`,
     `原文字幕來源：${flowConfirm.original_source_label}`,
     `音軌（自動選擇）：${flowConfirm.audio?.language || "未知"} · ${codecLabels[flowConfirm.audio?.codec] || flowConfirm.audio?.codec || "未知"}`,
     `輸出格式：${(flowConfirm.subtitle_forms?.[form] || flowConfirm.output_format).toUpperCase()}`,
@@ -439,6 +694,8 @@ function renderFlow() {
   if (!hasTarget || language?.bilingual_allowed === false) element("flow-include-original").checked = false;
   renderFlowFacts();
   renderFlowStatus();
+  renderFlowChoicesLine();
+  applyPanels();
   updateStartButton();
 }
 
@@ -461,13 +718,30 @@ function renderFlowStatus() {
   if (payload) {
     for (const stage of payload.stages) {
       const item = document.createElement("li");
-      const label = flowStepLabels[stage.stage] || stage.stage;
-      const percent = stage.progress == null ? "" : ` · ${Math.round(stage.progress * 100)}%`;
-      item.textContent = `${statusLabels[stage.status] ? statusIcons[stage.status] : statusIcons.info} ${label}：${statusLabels[stage.status] || stage.status}${percent}${stage.error_code ? ` · ${jobErrorLabel(stage.error_code)}` : ""}`;
+      item.dataset.status = stage.status;
+      const icon = statusMark(statusLabels[stage.status] ? stage.status : "info");
+      const label = document.createElement("span");
+      label.className = "stage-name";
+      label.textContent = flowStepLabels[stage.stage] || stage.stage;
+      const state = document.createElement("span");
+      state.className = "stage-state";
+      state.textContent = statusLabels[stage.status] || stage.status;
+      const figure = document.createElement("span");
+      figure.className = "stage-figure num";
+      figure.textContent = stage.progress == null ? "進度未知" : `${Math.round(stage.progress * 100)}%`;
+      item.append(icon, label, state, figure);
+      if (stage.error_code) {
+        const error = document.createElement("span");
+        error.className = "stage-error warn";
+        error.textContent = jobErrorLabel(stage.error_code);
+        item.append(error);
+      }
       stages.append(item);
     }
   }
   renderFlowActions();
+  // The register answers 「做到哪」, so it must re-read whenever the flow advances.
+  renderRegistry();
   const artifact = element("flow-artifact");
   artifact.replaceChildren();
   if (payload?.artifact) {
@@ -476,7 +750,7 @@ function renderFlowStatus() {
     link.textContent = "下載影片";
     link.setAttribute("download", "");
     const label = document.createElement("span");
-    label.textContent = `已完成：${payload.artifact.summary ? "成品就緒" : ""} `;
+    label.append(statusNode("completed", "成品就緒："));
     artifact.append(label, link);
   }
 }
@@ -539,8 +813,8 @@ function renderJobs() {
     ? `${statusLabels[active.status]} · ${stageLabels[active.kind] || active.kind} · ${stageLabels[active.stage] || active.stage || "準備中"}${active.progress == null ? " · 進度總量未知" : ` · ${Math.round(active.progress * 100)}%`}`
     : visibleJobs.length ? "目前沒有執行中的工作" : "尚無處理工作";
   // Only replace the live region when the text changes, so polling does not re-announce.
-  const statusText = `${active ? statusIcons[active.status] : statusIcons.info} ${announcement}`;
-  if (element("job-status").textContent !== statusText) {
+  if (lastAnnouncement !== announcement) {
+    lastAnnouncement = announcement;
     element("job-status").replaceChildren(statusNode(active ? active.status : "info", announcement));
   }
   for (const job of visibleJobs) {
@@ -564,6 +838,7 @@ function renderJobs() {
     }
     element("job-list").append(item);
   }
+  applyPanels();
   updateStartButton();
   if (currentVideo) renderPreviewPanel(currentVideo);
 }
@@ -596,9 +871,16 @@ async function savePosition(force = false) {
 }
 
 for (const id of ["resolution", "flow-language", "flow-subtitle-form"]) {
-  element(id).addEventListener("change", () => { refreshFlow().catch(showError); });
+  element(id).addEventListener("change", () => {
+    renderFlowChoicesLine();
+    renderRegistry();
+    refreshFlow().catch(showError);
+  });
 }
-element("flow-include-original").addEventListener("change", () => { renderFlow(); });
+element("flow-include-original").addEventListener("change", () => { renderFlow(); renderRegistry(); });
+for (const id of ["include-original", "export-original"]) {
+  element(id).addEventListener("change", renderRegistry);
+}
 element("resolution").addEventListener("change", renderResolvedSource);
 element("media-asset").addEventListener("change", async () => {
   if (!currentVideo) return;
@@ -611,7 +893,10 @@ element("media-asset").addEventListener("change", async () => {
 });
 const positionEvents = ["timeupdate", "pause", "seeked"];
 for (const event of positionEvents) {
-  element("player").addEventListener(event, () => savePosition(event !== "timeupdate"));
+  element("player").addEventListener(event, () => {
+    if (event === "timeupdate") renderCue();
+    savePosition(event !== "timeupdate");
+  });
 }
 document.addEventListener("visibilitychange", () => { if (document.hidden) savePosition(true); });
 element("import-form").addEventListener("submit", async (event) => {
@@ -744,15 +1029,17 @@ function applyPlaybackSubtitle(video) {
   }
   for (const track of player.querySelectorAll("track")) track.remove();
   const version = (video.subtitles || []).find((item) => item.id === video.playback_version_id && item.complete);
-  if (!version) return;
+  if (!version) { renderCue(); return; }
   const track = document.createElement("track");
   track.kind = "subtitles";
   track.srclang = version.language;
   track.label = subtitleLabel(version);
   track.src = `/api/subtitles/${controlled(version.id)}/track.vtt`;
   track.default = true;
-  track.addEventListener("load", () => { track.track.mode = "showing"; });
+  track.addEventListener("load", () => { track.track.mode = "showing"; renderCue(); });
+  track.track.addEventListener("cuechange", renderCue);
   player.append(track);
+  renderCue();
 }
 
 async function chooseSubtitle(selection, versionId) {
@@ -770,6 +1057,9 @@ function renderSubtitles(video, preserveSelection = false) {
   const originalSelection = preserveSelection ? element("export-original").value : video.translation_source_version_id;
   invalidateExport();
   const versions = video.subtitles || [];
+  element("subtitles-count").textContent = !versions.length
+    ? "尚無版本"
+    : `${versions.length} 個版本 · ${versions.filter((version) => version.complete).length} 個完整`;
   const complete = versions.filter((version) => version.complete);
   const optional = [{ id: "", name: "未選擇" }, ...complete];
   for (const [id, selected] of [
@@ -831,8 +1121,10 @@ function renderSubtitles(video, preserveSelection = false) {
   element("acquire-subtitles").disabled = !video.assets?.length;
   applyPlaybackSubtitle(video);
   updateTranslationButtons();
+  const artifacts = video.exports || [];
+  element("export-count").textContent = artifacts.length ? `${artifacts.length} 個成品` : "尚無成品";
   element("export-list").replaceChildren();
-  for (const artifact of video.exports || []) {
+  for (const artifact of artifacts) {
     const item = document.createElement("li");
     const link = document.createElement("a");
     link.href = `/api/exports/${controlled(artifact.id)}/download`;

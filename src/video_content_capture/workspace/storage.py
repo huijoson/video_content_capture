@@ -840,8 +840,14 @@ class Library:
 
     def ensure_conversation(self, video_id: str) -> Record | None:
         video = self.get_video(video_id)
-        if video["last_conversation_id"]:
-            return self.get_conversation(str(video["last_conversation_id"]))
+        pointer = video["last_conversation_id"]
+        if pointer:
+            try:
+                return self.get_conversation(str(pointer))
+            except ValueError:
+                # A pointer whose conversation is gone must not brick the whole video;
+                # clear it and fall through to the recovery path below.
+                self._clear_conversation_pointer(video_id, str(pointer))
         # Explicitly deleting a conversation does not silently create another one.
         with self._connect() as connection:
             if connection.execute(
@@ -852,6 +858,15 @@ class Library:
             return self.create_conversation(video_id)
         except ValueError:
             return None
+
+    def _clear_conversation_pointer(self, video_id: str, conversation_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE videos SET last_conversation_id=NULL,qa_version_id=NULL "
+                "WHERE id=? AND last_conversation_id=?",
+                (video_id, conversation_id),
+            )
 
     def get_conversation(self, conversation_id: str) -> Record:
         with self._connect() as connection:
@@ -1106,6 +1121,13 @@ class Library:
                 connection.execute(
                     f"UPDATE videos SET {column}=NULL WHERE {column}=?", (version_id,)
                 )
+            # A tombstone this purge removes must not leave its video pointing at nothing.
+            connection.execute(
+                "UPDATE videos SET last_conversation_id=NULL,qa_version_id=NULL WHERE "
+                "last_conversation_id IN (SELECT id FROM conversations "
+                "WHERE source_version_id=? AND status='deleted')",
+                (version_id,),
+            )
             # Deleted conversation tombstones (messages already removed) no longer pin a source.
             connection.execute(
                 "DELETE FROM conversations WHERE source_version_id=? AND status='deleted'",
