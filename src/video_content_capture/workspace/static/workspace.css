@@ -702,4 +702,5 @@ dialog::backdrop { background: var(--color-backdrop); }
 }
 @media (prefers-reduced-motion: reduce) {
   .registry-mark { transition: none; }
+  .panel-caret { transition: none; }
 }

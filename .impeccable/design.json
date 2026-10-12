@@ -1,0 +1,637 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-08T16:42:13Z",
+  "title": "Design System: 影片內容擷取 · 字幕校對格",
+  "extensions": {
+    "colorMeta": {
+      "desk": {
+        "role": "neutral",
+        "displayName": "檯面紙底 Desk Paper",
+        "canonical": "oklch(93.7% 0.0083 91.5)",
+        "tonalRamp": [
+          "#151517",
+          "#1e2322",
+          "#373c3b",
+          "#525656",
+          "#6e7372",
+          "#949999",
+          "#c0c5c5",
+          "#eceae4"
+        ]
+      },
+      "sheet": {
+        "role": "neutral",
+        "displayName": "紙白 Sheet White",
+        "canonical": "oklch(100.0% 0.0000 89.9)",
+        "tonalRamp": [
+          "#0b0b0d",
+          "#202024",
+          "#3a3a3c",
+          "#555557",
+          "#717174",
+          "#98989a",
+          "#c4c4c6",
+          "#ffffff"
+        ]
+      },
+      "recess": {
+        "role": "neutral",
+        "displayName": "退紙 Recess Paper",
+        "canonical": "oklch(95.5% 0.0070 88.6)",
+        "tonalRamp": [
+          "#080c0c",
+          "#26262b",
+          "#363c3b",
+          "#505756",
+          "#6d7372",
+          "#939a99",
+          "#bfc6c5",
+          "#f2f0eb"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "墨 Ink",
+        "canonical": "oklch(21.9% 0.0039 286.1)",
+        "tonalRamp": [
+          "#090c0c",
+          "#1a1a1c",
+          "#383b3b",
+          "#525656",
+          "#6f7272",
+          "#959999",
+          "#c1c5c5",
+          "#f2f1ed"
+        ]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "次要墨 Muted Ink",
+        "canonical": "oklch(45.1% 0.0081 286.1)",
+        "tonalRamp": [
+          "#070c0c",
+          "#1d2323",
+          "#363c3c",
+          "#55555a",
+          "#6c7373",
+          "#a9a8a2",
+          "#bec6c5",
+          "#e9f0f0"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "校對線 Rule",
+        "canonical": "oklch(82.7% 0.0102 87.5)",
+        "tonalRamp": [
+          "#070d0c",
+          "#1c2322",
+          "#3a3a40",
+          "#4f5756",
+          "#6b7472",
+          "#929a99",
+          "#c9c6bf",
+          "#e7f1ef"
+        ]
+      },
+      "rule-strong": {
+        "role": "neutral",
+        "displayName": "格線 Rule Strong",
+        "canonical": "oklch(62.4% 0.0096 84.6)",
+        "tonalRamp": [
+          "#060d0c",
+          "#1c2322",
+          "#343c3b",
+          "#4f5756",
+          "#6b6b73",
+          "#8a8781",
+          "#bdc6c5",
+          "#e7f1ef"
+        ]
+      },
+      "mark": {
+        "role": "secondary",
+        "displayName": "In/Out 紅 In/Out Red",
+        "canonical": "oklch(49.5% 0.1556 32.5)",
+        "tonalRamp": [
+          "#320000",
+          "#520000",
+          "#720600",
+          "#a8341f",
+          "#b44c38",
+          "#e1745e",
+          "#ff9b85",
+          "#ffcbb1"
+        ]
+      },
+      "ok": {
+        "role": "tertiary",
+        "displayName": "版本綠 Version Green",
+        "canonical": "oklch(49.0% 0.0842 159.2)",
+        "tonalRamp": [
+          "#001400",
+          "#002d0e",
+          "#004826",
+          "#2f6f4f",
+          "#3c825c",
+          "#64aa82",
+          "#7ac596",
+          "#baffd6"
+        ]
+      },
+      "primary": {
+        "role": "primary",
+        "displayName": "墨黑主要動作 Primary Ink",
+        "canonical": "oklch(21.9% 0.0039 286.1)",
+        "tonalRamp": [
+          "#090c0c",
+          "#1a1a1c",
+          "#383b3b",
+          "#525656",
+          "#6f7272",
+          "#959999",
+          "#c1c5c5",
+          "#f1f0ec"
+        ]
+      },
+      "primary-text": {
+        "role": "neutral",
+        "displayName": "實心字白 Primary Text",
+        "canonical": "oklch(100.0% 0.0000 89.9)",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#17171a",
+          "#3a3a3c",
+          "#555557",
+          "#717173",
+          "#98989a",
+          "#c4c4c6",
+          "#ffffff"
+        ]
+      },
+      "primary-hover": {
+        "role": "primary",
+        "displayName": "實心 Hover Ink Deep",
+        "canonical": "oklch(0.0% 0.0000 0.0)",
+        "tonalRamp": [
+          "#000000",
+          "#222222",
+          "#3a3a3a",
+          "#555555",
+          "#717171",
+          "#989898",
+          "#c4c4c4",
+          "#ffffff"
+        ]
+      },
+      "danger": {
+        "role": "secondary",
+        "displayName": "破壞紅 Danger Red",
+        "canonical": "oklch(49.5% 0.1556 32.5)",
+        "tonalRamp": [
+          "#320000",
+          "#520000",
+          "#720600",
+          "#a8341f",
+          "#b44c38",
+          "#e1745e",
+          "#ff9b85",
+          "#ffcbb1"
+        ]
+      },
+      "danger-text": {
+        "role": "neutral",
+        "displayName": "破壞實心字白 Danger Text",
+        "canonical": "oklch(100.0% 0.0000 89.9)",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#17171a",
+          "#3a3a3c",
+          "#555557",
+          "#717173",
+          "#98989a",
+          "#c4c4c6",
+          "#ffffff"
+        ]
+      },
+      "focus": {
+        "role": "primary",
+        "displayName": "焦點墨 Focus Ink",
+        "canonical": "oklch(21.9% 0.0039 286.1)",
+        "tonalRamp": [
+          "#090c0c",
+          "#1a1a1c",
+          "#383b3b",
+          "#525656",
+          "#6f7272",
+          "#959999",
+          "#c1c5c5",
+          "#f1f0ec"
+        ]
+      },
+      "selection": {
+        "role": "neutral",
+        "displayName": "選取底 Selection Wash",
+        "canonical": "oklch(88.5% 0.0219 47.0)",
+        "tonalRamp": [
+          "#170602",
+          "#301c14",
+          "#4a2c24",
+          "#664f47",
+          "#846b62",
+          "#ac9288",
+          "#e6d5cd",
+          "#ffe8dd"
+        ]
+      },
+      "backdrop": {
+        "role": "neutral",
+        "displayName": "遮幕 Scrim",
+        "canonical": "oklch(21.9% 0.0039 286.1)",
+        "tonalRamp": [
+          "#090c0c",
+          "#1a1a1c",
+          "#383b3b",
+          "#525656",
+          "#6f7272",
+          "#959999",
+          "#c1c5c5",
+          "#f2f1ed"
+        ],
+        "note": "帶透明度：rgb(26 26 28 / 55%)，深色模式 rgb(0 0 0 / 65%)；只用於 dialog::backdrop。"
+      },
+      "step-1": {
+        "role": "neutral",
+        "displayName": "灰階階梯 1 Greyscale Step 1",
+        "canonical": "oklch(21.9% 0.0039 286.1)",
+        "tonalRamp": [
+          "#1a1a1c",
+          "#3a3a3e",
+          "#5a5a5f",
+          "#7b7b81",
+          "#9c9ca2",
+          "#bdbdc2",
+          "#dedee1",
+          "#ffffff"
+        ],
+        "note": "專案自帶的八階中性刻度；此 ramp 即該刻度本身，深色模式刻意不覆寫。"
+      },
+      "step-2": {
+        "role": "neutral",
+        "displayName": "灰階階梯 2 Greyscale Step 2",
+        "canonical": "oklch(35.0% 0.0069 286.0)",
+        "tonalRamp": [
+          "#1a1a1c",
+          "#3a3a3e",
+          "#5a5a5f",
+          "#7b7b81",
+          "#9c9ca2",
+          "#bdbdc2",
+          "#dedee1",
+          "#ffffff"
+        ],
+        "note": "專案自帶的八階中性刻度；此 ramp 即該刻度本身，深色模式刻意不覆寫。"
+      },
+      "step-3": {
+        "role": "neutral",
+        "displayName": "灰階階梯 3 Greyscale Step 3",
+        "canonical": "oklch(46.9% 0.0080 286.1)",
+        "tonalRamp": [
+          "#1a1a1c",
+          "#3a3a3e",
+          "#5a5a5f",
+          "#7b7b81",
+          "#9c9ca2",
+          "#bdbdc2",
+          "#dedee1",
+          "#ffffff"
+        ],
+        "note": "專案自帶的八階中性刻度；此 ramp 即該刻度本身，深色模式刻意不覆寫。"
+      },
+      "step-4": {
+        "role": "neutral",
+        "displayName": "灰階階梯 4 Greyscale Step 4",
+        "canonical": "oklch(58.5% 0.0091 286.1)",
+        "tonalRamp": [
+          "#1a1a1c",
+          "#3a3a3e",
+          "#5a5a5f",
+          "#7b7b81",
+          "#9c9ca2",
+          "#bdbdc2",
+          "#dedee1",
+          "#ffffff"
+        ],
+        "note": "專案自帶的八階中性刻度；此 ramp 即該刻度本身，深色模式刻意不覆寫。"
+      },
+      "step-5": {
+        "role": "neutral",
+        "displayName": "灰階階梯 5 Greyscale Step 5",
+        "canonical": "oklch(69.5% 0.0087 286.2)",
+        "tonalRamp": [
+          "#1a1a1c",
+          "#3a3a3e",
+          "#5a5a5f",
+          "#7b7b81",
+          "#9c9ca2",
+          "#bdbdc2",
+          "#dedee1",
+          "#ffffff"
+        ],
+        "note": "專案自帶的八階中性刻度；此 ramp 即該刻度本身，深色模式刻意不覆寫。"
+      },
+      "step-6": {
+        "role": "neutral",
+        "displayName": "灰階階梯 6 Greyscale Step 6",
+        "canonical": "oklch(80.0% 0.0070 286.2)",
+        "tonalRamp": [
+          "#1a1a1c",
+          "#3a3a3e",
+          "#5a5a5f",
+          "#7b7b81",
+          "#9c9ca2",
+          "#bdbdc2",
+          "#dedee1",
+          "#ffffff"
+        ],
+        "note": "專案自帶的八階中性刻度；此 ramp 即該刻度本身，深色模式刻意不覆寫。"
+      },
+      "step-7": {
+        "role": "neutral",
+        "displayName": "灰階階梯 7 Greyscale Step 7",
+        "canonical": "oklch(90.1% 0.0041 286.3)",
+        "tonalRamp": [
+          "#1a1a1c",
+          "#3a3a3e",
+          "#5a5a5f",
+          "#7b7b81",
+          "#9c9ca2",
+          "#bdbdc2",
+          "#dedee1",
+          "#ffffff"
+        ],
+        "note": "專案自帶的八階中性刻度；此 ramp 即該刻度本身，深色模式刻意不覆寫。"
+      },
+      "step-8": {
+        "role": "neutral",
+        "displayName": "灰階階梯 8 Greyscale Step 8",
+        "canonical": "oklch(100.0% 0.0000 89.9)",
+        "tonalRamp": [
+          "#1a1a1c",
+          "#3a3a3e",
+          "#5a5a5f",
+          "#7b7b81",
+          "#9c9ca2",
+          "#bdbdc2",
+          "#dedee1",
+          "#ffffff"
+        ],
+        "note": "專案自帶的八階中性刻度；此 ramp 即該刻度本身，深色模式刻意不覆寫。"
+      }
+    },
+    "typographyMeta": {
+      "h1": {
+        "displayName": "H1",
+        "purpose": "頁面唯一標題；全系統最大字級 1.5rem，一頁只有一個。"
+      },
+      "h2": {
+        "displayName": "H2",
+        "purpose": "區塊標題與影片標題（開始處理、匯出影片、影片管理）。"
+      },
+      "h3": {
+        "displayName": "H3",
+        "purpose": "欄標題與分段標題（匯入字幕、翻譯）。"
+      },
+      "h4": {
+        "displayName": "H4",
+        "purpose": "卡片內最後一層分段標題，與內文同級但加重。"
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "說明段落、摘要、問答訊息；行高 1.55 服務 CJK／拉丁混排。"
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "表單標籤，600 字重，緊貼所屬欄位。"
+      },
+      "small": {
+        "displayName": "Small",
+        "purpose": ".hint、狀態列、登錄列欄值；永遠配次要墨色。"
+      },
+      "micro": {
+        "displayName": "Micro",
+        "purpose": "登錄列欄標籤與字幕線 IN／OUT 邊界；700 字重、0.08em 字距。"
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "量測字體：時間碼、時長、版本代號、解析度、階段數字；tabular-nums。"
+      }
+    },
+    "shadows": [
+      {
+        "name": "worksheet-reticle",
+        "value": "0 calc(var(--reticle-cross, 7rem) / -2) 0 0 var(--color-rule-strong, #8a8781), 0 calc(var(--reticle-cross, 7rem) / 2) 0 0 var(--color-rule-strong, #8a8781)",
+        "purpose": "不是高程：用兩份零模糊的硬位移複製橫線，畫出無訊號工作表校準十字的垂直兩臂。任何表面不得引用它當陰影樣式。"
+      }
+    ],
+    "motion": [
+      {
+        "name": "duration-state",
+        "value": ".14s",
+        "purpose": "按鈕狀態換色（背景、邊框色）的時間。"
+      },
+      {
+        "name": "ease-state",
+        "value": "ease-out",
+        "purpose": "狀態換色的緩動；短、不表演。"
+      },
+      {
+        "name": "duration-settle",
+        "value": ".42s",
+        "purpose": "版本登錄列 2px 紅記號滑到目前欄位的時間；唯一的簽名動態。"
+      },
+      {
+        "name": "ease-settle",
+        "value": "cubic-bezier(.16, 1, .3, 1)",
+        "purpose": "紅記號的緩動：快起、緩停，像鉛筆落定。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow",
+        "value": "60rem",
+        "purpose": "三欄轉單欄堆疊，影片庫可收合，字幕／問答分頁出現；版本登錄列由 4 欄改 2 欄，紅記號改 50% 寬並重新對應位移。"
+      },
+      {
+        "name": "compact",
+        "value": "30rem",
+        "purpose": "頁首與欄內距收緊，網址列按鈕撐滿寬度；供 200% 縮放使用。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "主要動作：一屏一個。墨黑實心，不是彩色——載入影片、開始處理、送出問題。",
+      "html": "<button class=\"ds-btn-primary\" type=\"button\">載入影片</button>",
+      "css": ".ds-btn-primary { font-family: var(--font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, \"PingFang TC\", \"Noto Sans TC\", sans-serif); font-size: var(--font-size-base, .9375rem); line-height: var(--line-height, 1.55); font-weight: 600; background: var(--color-primary, #1a1a1c); color: var(--color-primary-text, #ffffff); border: 1px solid var(--color-primary, #1a1a1c); border-radius: var(--radius-small, .375rem); padding: var(--space-2, .5rem); cursor: pointer; transition: background var(--duration-state, .14s) var(--ease-state, ease-out), border-color var(--duration-state, .14s) var(--ease-state, ease-out); } .ds-btn-primary:hover { background: var(--color-primary-hover, #000000); border-color: var(--color-primary-hover, #000000); } .ds-btn-primary:focus-visible { outline: var(--focus-width, 2px) solid var(--color-focus, #1a1a1c); outline-offset: var(--focus-offset, 2px); } .ds-btn-primary:disabled { background: var(--color-recess, #f2f0eb); color: var(--color-ink-muted, #55555a); border-color: var(--color-rule, #c9c6bf); cursor: not-allowed; }"
+    },
+    {
+      "name": "Default Button",
+      "kind": "button",
+      "refersTo": "button-default",
+      "description": "次要操作：紙白底墨字，hover 整顆沉入退紙。取消、重新查詢都用它。",
+      "html": "<button class=\"ds-btn\" type=\"button\">重新查詢</button>",
+      "css": ".ds-btn { font-family: var(--font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, \"PingFang TC\", \"Noto Sans TC\", sans-serif); font-size: var(--font-size-base, .9375rem); line-height: var(--line-height, 1.55); background: var(--color-sheet, #ffffff); color: var(--color-ink, #1a1a1c); border: 1px solid var(--color-rule-strong, #8a8781); border-radius: var(--radius-small, .375rem); padding: var(--space-2, .5rem); cursor: pointer; transition: background var(--duration-state, .14s) var(--ease-state, ease-out), border-color var(--duration-state, .14s) var(--ease-state, ease-out); } .ds-btn:hover { background: var(--color-recess, #f2f0eb); border-color: var(--color-ink, #1a1a1c); } .ds-btn:focus-visible { outline: var(--focus-width, 2px) solid var(--color-focus, #1a1a1c); outline-offset: var(--focus-offset, 2px); } .ds-btn:disabled { background: var(--color-recess, #f2f0eb); color: var(--color-ink-muted, #55555a); border-color: var(--color-rule, #c9c6bf); cursor: not-allowed; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "破壞性動作兩段強度：紅字紅框的觸發鈕，與唯一允許紅底白字的確認鈕（須勾選後啟用）。",
+      "html": "<button class=\"ds-btn-danger\" type=\"button\">刪除整支影片…</button> <button class=\"ds-btn-danger-solid\" type=\"button\">永久刪除</button>",
+      "css": ".ds-btn-danger { font-family: var(--font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, \"PingFang TC\", \"Noto Sans TC\", sans-serif); font-size: var(--font-size-base, .9375rem); line-height: var(--line-height, 1.55); background: var(--color-sheet, #ffffff); color: var(--color-danger, #a8341f); border: 1px solid var(--color-danger, #a8341f); border-radius: var(--radius-small, .375rem); padding: var(--space-2, .5rem); cursor: pointer; transition: background var(--duration-state, .14s) var(--ease-state, ease-out), border-color var(--duration-state, .14s) var(--ease-state, ease-out); } .ds-btn-danger:hover { background: var(--color-recess, #f2f0eb); } .ds-btn-danger:focus-visible, .ds-btn-danger-solid:focus-visible { outline: var(--focus-width, 2px) solid var(--color-focus, #1a1a1c); outline-offset: var(--focus-offset, 2px); } .ds-btn-danger-solid { font-family: var(--font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, \"PingFang TC\", \"Noto Sans TC\", sans-serif); font-size: var(--font-size-base, .9375rem); line-height: var(--line-height, 1.55); font-weight: 600; background: var(--color-danger, #a8341f); color: var(--color-danger-text, #ffffff); border: 1px solid var(--color-danger, #a8341f); border-radius: var(--radius-small, .375rem); padding: var(--space-2, .5rem); cursor: pointer; } .ds-btn-danger-solid:disabled { background: var(--color-recess, #f2f0eb); color: var(--color-ink-muted, #55555a); border-color: var(--color-rule, #c9c6bf); cursor: not-allowed; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "紙白底、格線框、紅色 caret；標籤永遠在欄位上方，不是佔位文字。",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field-label\">YouTube 影片網址</span><input class=\"ds-input\" type=\"url\" placeholder=\"貼上一支影片網址\"></label>",
+      "css": ".ds-field { display: block; } .ds-field-label { display: block; font-family: var(--font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, \"PingFang TC\", \"Noto Sans TC\", sans-serif); font-size: var(--font-size-base, .9375rem); font-weight: 600; line-height: var(--line-height, 1.55); margin: var(--space-3, .75rem) 0 var(--space-1, .25rem); } .ds-input { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--font-size-base, .9375rem); color: var(--color-ink, #1a1a1c); background: var(--color-sheet, #ffffff); border: 1px solid var(--color-rule-strong, #8a8781); border-radius: var(--radius-small, .375rem); padding: var(--space-2, .5rem); caret-color: var(--color-mark, #a8341f); } .ds-input::placeholder { color: var(--color-ink-muted, #55555a); } .ds-input:focus-visible { outline: var(--focus-width, 2px) solid var(--color-focus, #1a1a1c); outline-offset: var(--focus-offset, 2px); } .ds-input:disabled { background: var(--color-recess, #f2f0eb); color: var(--color-ink-muted, #55555a); border-color: var(--color-rule, #c9c6bf); cursor: not-allowed; }"
+    },
+    {
+      "name": "Ruled Section Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "區塊不是盒子：一條上緣格線加內距，印在工作表上，不嵌套。",
+      "html": "<section class=\"ds-card\"><h3 class=\"ds-card-title\">匯入字幕</h3><p class=\"ds-card-body\">選擇語言與字幕形式後取得原文字幕。</p></section>",
+      "css": ".ds-card { border-top: 1px solid var(--color-rule-strong, #8a8781); margin: var(--space-6, 1.5rem) 0 0; padding-top: var(--space-3, .75rem); } .ds-card-title { font-family: var(--font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, \"PingFang TC\", \"Noto Sans TC\", sans-serif); font-size: var(--font-size-h3, 1rem); font-weight: 700; line-height: var(--line-height, 1.55); color: var(--color-ink, #1a1a1c); margin: 0 0 var(--space-2, .5rem); } .ds-card-body { font-family: var(--font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, \"PingFang TC\", \"Noto Sans TC\", sans-serif); font-size: var(--font-size-base, .9375rem); line-height: var(--line-height, 1.55); color: var(--color-ink, #1a1a1c); max-width: var(--measure, 68ch); margin: var(--space-2, .5rem) 0 var(--space-3, .75rem); }"
+    },
+    {
+      "name": "Version Register",
+      "kind": "custom",
+      "refersTo": "registry-field",
+      "description": "簽名元件：四欄登錄列，一條 2px 紅記號標出目前做到哪；沒有進行中的工作時記號隱藏。",
+      "html": "<div class=\"ds-registry\" data-current=\"target\"><dl class=\"ds-registry-fields\"><div class=\"ds-registry-field\"><dt>來源影音</dt><dd>1080p · 00:42:10</dd></div><div class=\"ds-registry-field\"><dt>原文字幕</dt><dd>人工 · zh-Hant</dd></div><div class=\"ds-registry-field\"><dt>目標字幕</dt><dd>雙語 · zh-Hant</dd></div><div class=\"ds-registry-field\"><dt>成品</dt><dd>尚未匯出</dd></div></dl><span class=\"ds-registry-mark\" aria-hidden=\"true\"></span></div>",
+      "css": ".ds-registry { position: relative; border-top: 1px solid var(--color-rule-strong, #8a8781); padding-top: var(--space-2, .5rem); font-family: var(--font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, \"PingFang TC\", \"Noto Sans TC\", sans-serif); color: var(--color-ink, #1a1a1c); } .ds-registry-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; } .ds-registry-field { padding: var(--space-2, .5rem) var(--space-3, .75rem); min-width: 0; } .ds-registry-field + .ds-registry-field { border-left: 1px solid var(--color-rule, #c9c6bf); } .ds-registry-field dt { font-size: var(--font-size-micro, .75rem); font-weight: 700; color: var(--color-ink-muted, #55555a); letter-spacing: var(--tracking-label, .08em); } .ds-registry-field dd { margin: var(--space-1, .25rem) 0 0; font-size: var(--font-size-small, .8125rem); line-height: var(--line-height-data, 1.25); } .ds-registry-mark { position: absolute; top: 0; left: 0; width: 25%; height: var(--rule-mark, 2px); background: var(--color-mark, #a8341f); transition: transform var(--duration-settle, .42s) var(--ease-settle, cubic-bezier(.16, 1, .3, 1)); } .ds-registry[data-current=\"original\"] .ds-registry-mark { transform: translateX(100%); } .ds-registry[data-current=\"target\"] .ds-registry-mark { transform: translateX(200%); } .ds-registry[data-current=\"artifact\"] .ds-registry-mark { transform: translateX(300%); } .ds-registry:not([data-current]) .ds-registry-mark { display: none; } @media (prefers-reduced-motion: reduce) { .ds-registry-mark { transition: none; } }"
+    },
+    {
+      "name": "Playing Cue Line",
+      "kind": "custom",
+      "refersTo": "cue-line",
+      "description": "簽名元件：播放中的 VTT 字幕讀成 IN／OUT 一行；分隔是畫出來的帶頭規則線，不是字符。",
+      "html": "<p class=\"ds-cue-line\"><span class=\"ds-cue-edge\">IN</span><span class=\"ds-cue-time\">00:12:04.5</span><span class=\"ds-cue-arrow\" aria-hidden=\"true\"></span><span class=\"ds-cue-time\">00:12:07.2</span><span class=\"ds-cue-edge\">OUT</span><span class=\"ds-cue-state\">播放字幕：zh-Hant</span></p>",
+      "css": ".ds-cue-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2, .5rem); margin: var(--space-2, .5rem) 0 0; padding: var(--space-2, .5rem) var(--space-3, .75rem); background: var(--color-recess, #f2f0eb); border: 1px solid var(--color-rule, #c9c6bf); border-radius: var(--radius-small, .375rem); font-family: var(--font-family-mono, ui-monospace, \"SF Mono\", Menlo, monospace); font-variant-numeric: tabular-nums; font-size: var(--font-size-small, .8125rem); line-height: var(--line-height-data, 1.25); } .ds-cue-edge { color: var(--color-mark, #a8341f); font-weight: 700; font-size: var(--font-size-micro, .75rem); letter-spacing: var(--tracking-label, .08em); } .ds-cue-time { color: var(--color-ink, #1a1a1c); } .ds-cue-state { margin-left: auto; color: var(--color-ink-muted, #55555a); } .ds-cue-arrow { display: inline-block; align-self: center; position: relative; width: var(--arrow-length, 1rem); height: var(--arrow-head, .375rem); } .ds-cue-arrow::before { content: \"\"; position: absolute; top: 50%; left: 0; width: var(--arrow-length, 1rem); height: var(--mark-stroke, 1px); margin-top: calc(var(--mark-stroke, 1px) / -2); background: var(--color-rule-strong, #8a8781); } .ds-cue-arrow::after { content: \"\"; position: absolute; top: 50%; right: 0; width: calc(var(--arrow-head, .375rem) * .72); height: calc(var(--arrow-head, .375rem) * .72); margin-top: calc(var(--arrow-head, .375rem) * -.36); border: solid var(--color-rule-strong, #8a8781); border-width: var(--mark-stroke, 1px) var(--mark-stroke, 1px) 0 0; transform: rotate(45deg); }"
+    },
+    {
+      "name": "Status Marks",
+      "kind": "custom",
+      "refersTo": "status-mark",
+      "description": "簽名元件：狀態記號是畫出來的形狀（圓環、打勾、叉、雙槓、圓點），currentColor 上色、aria-hidden，語意由緊鄰文字承擔。已知窄處：failed 與 cancelled 共用同一個叉，pending 與 queued 共用同一個圓環，差別只在文字標籤。",
+      "html": "<p class=\"ds-status\"><span class=\"ds-mark\" data-mark=\"pending\" aria-hidden=\"true\"></span>排隊中</p><p class=\"ds-status\"><span class=\"ds-mark\" data-mark=\"running\" aria-hidden=\"true\"></span>執行中</p><p class=\"ds-status\"><span class=\"ds-mark\" data-mark=\"completed\" aria-hidden=\"true\"></span>完成</p><p class=\"ds-status\"><span class=\"ds-mark\" data-mark=\"failed\" aria-hidden=\"true\"></span>失敗</p>",
+      "css": ".ds-status { font-family: var(--font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, \"PingFang TC\", \"Noto Sans TC\", sans-serif); font-size: var(--font-size-base, .9375rem); line-height: var(--line-height, 1.55); color: var(--color-ink, #1a1a1c); margin: var(--space-2, .5rem) 0; } .ds-mark { display: inline-block; position: relative; width: 1.1em; min-width: 1.1em; height: var(--mark-size, .625rem); vertical-align: -.0625em; } .ds-mark::before, .ds-mark::after { content: \"\"; position: absolute; top: 50%; left: 50%; box-sizing: border-box; } .ds-mark[data-mark=\"pending\"]::before { width: var(--mark-size, .625rem); height: var(--mark-size, .625rem); margin: calc(var(--mark-size, .625rem) / -2) 0 0 calc(var(--mark-size, .625rem) / -2); border: var(--mark-stroke, 1px) solid; border-radius: 50%; opacity: .7; } .ds-mark[data-mark=\"running\"]::before { width: var(--mark-size, .625rem); height: var(--mark-size, .625rem); margin: calc(var(--mark-size, .625rem) / -2) 0 0 calc(var(--mark-size, .625rem) / -2); border: var(--mark-stroke, 1px) solid; border-radius: 50%; } .ds-mark[data-mark=\"running\"]::after { width: calc(var(--mark-stroke, 1px) * 3); height: calc(var(--mark-stroke, 1px) * 3); margin: calc(var(--mark-stroke, 1px) * -1.5) 0 0 calc(var(--mark-stroke, 1px) * -1.5); background: currentColor; border-radius: 50%; } .ds-mark[data-mark=\"completed\"]::before { width: calc(var(--mark-size, .625rem) * .4); height: calc(var(--mark-size, .625rem) * .74); margin: calc(var(--mark-size, .625rem) * -.5) 0 0 calc(var(--mark-size, .625rem) * -.28); border: solid; border-width: 0 var(--mark-stroke, 1px) var(--mark-stroke, 1px) 0; transform: rotate(45deg); } .ds-mark[data-mark=\"failed\"]::before, .ds-mark[data-mark=\"failed\"]::after { width: var(--mark-size, .625rem); height: var(--mark-stroke, 1px); margin: calc(var(--mark-stroke, 1px) / -2) 0 0 calc(var(--mark-size, .625rem) / -2); background: currentColor; } .ds-mark[data-mark=\"failed\"]::before { transform: rotate(45deg); } .ds-mark[data-mark=\"failed\"]::after { transform: rotate(-45deg); }"
+    },
+    {
+      "name": "Four-Stage Flow Row",
+      "kind": "custom",
+      "refersTo": "flow-stage-row",
+      "description": "簽名元件：四階段流程的每一列是一條四欄資料列（記號／階段名／狀態／數字）。執行中的那一列鋪退紙底，完成綠字，失敗與取消紅字。",
+      "html": "<ul class=\"ds-flow\"><li class=\"ds-flow-row\" data-status=\"completed\"><span class=\"ds-mark\" data-mark=\"completed\" aria-hidden=\"true\"></span><span class=\"ds-flow-name\">下載影音</span><span class=\"ds-flow-state\">完成</span><span class=\"ds-flow-figure\">100%</span></li><li class=\"ds-flow-row\" data-status=\"running\"><span class=\"ds-mark\" data-mark=\"running\" aria-hidden=\"true\"></span><span class=\"ds-flow-name\">取得字幕／匯入</span><span class=\"ds-flow-state\">執行中</span><span class=\"ds-flow-figure\">38%</span></li><li class=\"ds-flow-row\" data-status=\"failed\"><span class=\"ds-mark\" data-mark=\"failed\" aria-hidden=\"true\"></span><span class=\"ds-flow-name\">翻譯</span><span class=\"ds-flow-state\">失敗</span><span class=\"ds-flow-figure\">12%</span></li></ul>",
+      "css": ".ds-flow { list-style: none; margin: 0; padding: 0; font-family: var(--font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, \"PingFang TC\", \"Noto Sans TC\", sans-serif); font-size: var(--font-size-base, .9375rem); line-height: var(--line-height, 1.55); color: var(--color-ink, #1a1a1c); } .ds-flow-row { display: grid; grid-template-columns: 1.2em minmax(0, 1fr) auto 4.5rem; gap: var(--space-1, .25rem) var(--space-2, .5rem); align-items: baseline; padding: var(--space-1, .25rem) var(--space-2, .5rem); } .ds-flow-row[data-status=\"running\"] { background: var(--color-recess, #f2f0eb); } .ds-flow-name { font-weight: 600; } .ds-flow-state { color: var(--color-ink-muted, #55555a); } .ds-flow-row[data-status=\"completed\"] .ds-flow-state { color: var(--color-ok, #2f6f4f); } .ds-flow-row[data-status=\"failed\"] .ds-flow-state { color: var(--color-mark, #a8341f); } .ds-flow-figure { color: var(--color-ink-muted, #55555a); text-align: right; font-variant-numeric: tabular-nums; } .ds-mark { display: inline-block; position: relative; width: 1.1em; min-width: 1.1em; height: var(--mark-size, .625rem); vertical-align: -.0625em; } .ds-mark::before, .ds-mark::after { content: \"\"; position: absolute; top: 50%; left: 50%; box-sizing: border-box; } .ds-mark[data-mark=\"completed\"]::before { width: calc(var(--mark-size, .625rem) * .4); height: calc(var(--mark-size, .625rem) * .74); margin: calc(var(--mark-size, .625rem) * -.5) 0 0 calc(var(--mark-size, .625rem) * -.28); border: solid; border-width: 0 var(--mark-stroke, 1px) var(--mark-stroke, 1px) 0; transform: rotate(45deg); } .ds-mark[data-mark=\"running\"]::before { width: var(--mark-size, .625rem); height: var(--mark-size, .625rem); margin: calc(var(--mark-size, .625rem) / -2) 0 0 calc(var(--mark-size, .625rem) / -2); border: var(--mark-stroke, 1px) solid; border-radius: 50%; } .ds-mark[data-mark=\"running\"]::after { width: calc(var(--mark-stroke, 1px) * 3); height: calc(var(--mark-stroke, 1px) * 3); margin: calc(var(--mark-stroke, 1px) * -1.5) 0 0 calc(var(--mark-stroke, 1px) * -1.5); background: currentColor; border-radius: 50%; } .ds-mark[data-mark=\"failed\"]::before, .ds-mark[data-mark=\"failed\"]::after { width: var(--mark-size, .625rem); height: var(--mark-stroke, 1px); margin: calc(var(--mark-stroke, 1px) / -2) 0 0 calc(var(--mark-size, .625rem) / -2); background: currentColor; } .ds-mark[data-mark=\"failed\"]::before { transform: rotate(45deg); } .ds-mark[data-mark=\"failed\"]::after { transform: rotate(-45deg); }"
+    },
+    {
+      "name": "No-Signal Worksheet",
+      "kind": "custom",
+      "refersTo": "worksheet",
+      "description": "簽名元件：沒有來源時播放器給一張畫出來的對位工作表——八階灰階階梯、校準環與十字，全部由 CSS 漸層與邊框畫成（專案禁止 url(），說明文字走等寬。",
+      "html": "<div class=\"ds-player-empty\"><span class=\"ds-worksheet\" aria-hidden=\"true\"></span><span class=\"ds-reticle\" aria-hidden=\"true\"></span><p class=\"ds-worksheet-caption\">尚未載入影片；貼上網址並按載入影片。</p></div>",
+      "css": ".ds-player-empty { position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; overflow: hidden; background: var(--color-recess, #f2f0eb); border: 1px solid var(--color-rule, #c9c6bf); border-radius: var(--radius, .5rem); padding: var(--space-4, 1rem); } .ds-worksheet { position: absolute; inset: 0; } .ds-worksheet::before { content: \"\"; position: absolute; inset: auto 0 0 0; height: var(--strip-height, 2.25rem); border-top: 1px solid var(--color-rule-strong, #8a8781); background: linear-gradient(90deg, var(--color-step-1, #1a1a1c) 0 12.5%, var(--color-step-2, #3a3a3e) 12.5% 25%, var(--color-step-3, #5a5a5f) 25% 37.5%, var(--color-step-4, #7b7b81) 37.5% 50%, var(--color-step-5, #9c9ca2) 50% 62.5%, var(--color-step-6, #bdbdc2) 62.5% 75%, var(--color-step-7, #dedee1) 75% 87.5%, var(--color-step-8, #ffffff) 87.5% 100%); } .ds-worksheet::after { content: \"\"; position: absolute; left: 50%; top: 50%; width: var(--reticle-cross, 7rem); height: 1px; transform: translate(-50%, -50%); background: var(--color-rule-strong, #8a8781); box-shadow: 0 calc(var(--reticle-cross, 7rem) / -2) 0 0 var(--color-rule-strong, #8a8781), 0 calc(var(--reticle-cross, 7rem) / 2) 0 0 var(--color-rule-strong, #8a8781); } .ds-reticle { position: absolute; left: 50%; top: 50%; width: var(--reticle-ring, 2.75rem); height: var(--reticle-ring, 2.75rem); transform: translate(-50%, -50%); border: 1px solid var(--color-rule-strong, #8a8781); border-radius: 50%; background: var(--color-recess, #f2f0eb); } .ds-worksheet-caption { position: relative; margin: 0; padding-bottom: calc(var(--strip-height, 2.25rem) / 2); color: var(--color-ink-muted, #55555a); font-family: var(--font-family-mono, ui-monospace, \"SF Mono\", Menlo, monospace); font-size: var(--font-size-small, .8125rem); text-align: center; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "字幕校對格 Cue-Sheet Bench",
+    "overview": "這是一張擺在重製現場的校對表，不是一個網站。桌面是紙底的，工作表是紙白的，工作靠欄位對齊與 1px 校對線完成——不靠浮起的卡片、不靠陰影、不靠色塊。三個工位（影片庫、播放與字幕、影片問答）攤在同一張紙上，彼此之間只有一條線；每一列資料都落在自己該在的欄位上，所以「哪一步在跑、哪個版本被選中、成品在哪」永遠一眼可見。\n\n彩色預算近乎零：整頁只有兩個彩色——in/out 紅與版本綠——而且兩者都只在有語意時出現。主要動作是墨黑實心按鈕，不是彩色按鈕；選取狀態是退紙底加墨色框，不是彩色底。深淺兩套 token 都跟隨系統偏好，不提供手動切換。\n\n這個世界只出借字體、調色盤、密度與一個簽名動作（版本登錄列的 2px 紅記號），從不出借版面、導覽或控制項：三欄佈局、元素 id、流程與全部繁中文案都沿用同一個產品契約。介面本身不說話，它讓時間碼、版本與狀態文字說話。",
+    "keyCharacteristics": [
+      "檯面紙底（#eceae4）上一張紙白工作表（#ffffff）；退紙（#f2f0eb）只給 hover、停用與需要低調的區塊。全系統零陰影、零玻璃、零漸層，深度一律是一條線。",
+      "只有兩個彩色：in/out 紅（#a8341f）與版本綠（#2f6f4f）。沒有藍色——舊系統的 #2856c7 已完全退役，不留任何殘餘。",
+      "墨黑實心是主要動作的顏色（--color-primary＝--color-ink），不是彩色；破壞性動作才以紅字紅框出現。",
+      "等寬字體是量測工具，不是風格：時間碼、時長、版本代號、解析度、階段數字才用等寬，且一律 tabular numerals。",
+      "全系統兩個矩形圓角（8px 容器、6px 控制項）加上 --radius-round 一個真圓，真圓只用於畫出來的圓形（狀態記號的圓環與圓點、校準環）。",
+      "狀態一律「畫出來的記號 ＋ 繁體中文文字」成對出現，記號是 aria-hidden 的裝飾，顏色永遠不是唯一訊號。"
+    ],
+    "rules": [
+      {
+        "name": "The Marking-Pencil Rule（紅鉛筆規則）",
+        "body": "紅只准出現在它標記的東西上：破壞、錯誤與失敗、播放中字幕線的 IN／OUT 邊界、版本登錄列的目前位置記號、以及文字輸入的 caret。紅不是強調色、不是裝飾底色、不是選取狀態——任何「安全」的動作（取消、關閉、重試）都不准沾紅。",
+        "section": "colors"
+      },
+      {
+        "name": "The Completion-Only Green Rule（綠只標完成規則）",
+        "body": "版本綠只有一個意義：做完了。它標 .done 與 completed 狀態，不標「成功機率高」、「已通過驗證」或任何尚未發生的好事。",
+        "section": "colors"
+      },
+      {
+        "name": "The No-Blue Rule（無藍規則）",
+        "body": "這個世界沒有藍色。主要動作是墨黑、選取是退紙、焦點環是墨色；新表面不得引入任何藍色色相，包含連結、圖表與資訊型徽章。",
+        "section": "colors"
+      },
+      {
+        "name": "The Measurement-Only Mono Rule（等寬只量數規則）",
+        "body": "等寬字體只用在真正的量測上：時間碼（00:12:04.5）、時長、版本代號、解析度、階段數字、引用摘要。它不是「技術感」的裝飾，也不准用來排內文、標籤或按鈕文字；凡是非量測的文字走系統堆疊。所有數字一律 font-variant-numeric: tabular-nums，讓同一欄的數字能上下對齊。",
+        "section": "typography"
+      },
+      {
+        "name": "The System-Stack Rule（系統堆疊規則）",
+        "body": "這個系統沒有展示體，也不下載任何字體：正文、標題、標籤全部走系統堆疊。若某個新區塊「需要更有個性的字」，答案是換欄位、換線或換密度，不是引入字體。",
+        "section": "typography"
+      },
+      {
+        "name": "The 24px Ceiling Rule（24px 天花板規則）",
+        "body": "任何文字不得超過 1.5rem（24px），且全頁只有一個 H1。層級用字重、欄位位置與線表達，不用尺寸——超過 24px 的字不屬於這張表。",
+        "section": "typography"
+      },
+      {
+        "name": "The Three-Station Rule（三工位規則）",
+        "body": "桌面寬度下，三個工作區必須同時可見、可直接操作；任何功能不得被藏進只顯示單一欄的模式裡。60rem 以下換的是排列方式，不是把工位收起來——tab 換面板時播放器與未送出的草稿都留在原處。",
+        "section": "layout"
+      },
+      {
+        "name": "The Ink-Line Rule（線即深度規則）",
+        "body": "需要分隔感時加一條線或調整紙的明度，不要加陰影、模糊或玻璃。深度是線，不是光；唯一的 box-shadow 是畫校準十字的筆，不是可繼承的表面樣式。",
+        "section": "elevation"
+      },
+      {
+        "name": "The Two-Radius Rule（雙圓角規則）",
+        "body": "除了 8px 與 6px，不准出現第三個矩形圓角值；圓形一律用 --radius-round 畫，不准用大圓角假裝。若某個新元素「感覺需要」4px 或 12px，那是它在要求被重新歸類，不是要求新數值。",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do 讓紙的三層明度承擔空間感：檯面 #eceae4、工作表 #ffffff、退紙 #f2f0eb。需要更低調就用退紙，不要把顏色當成「次要表面」的解法。",
+      "Do 需要分隔時先畫一條線：區塊上緣用格線（#8a8781），欄與列用校對線（#c9c6bf）。",
+      "Do 讓主要動作穿墨黑實心（--color-primary），一屏一個；選取狀態用退紙底＋墨框＋600 字重，不用彩色。",
+      "Do 為每個可互動元素保留 2px 墨色焦點環與 2px 外距；outline-offset 是它不被邊框吃掉的原因。",
+      "Do 把紅（#a8341f）只用在破壞、失敗、播放中字幕線的 IN／OUT 邊界、登錄列的目前位置記號與 caret，把綠（#2f6f4f）只用在完成與 .done——兩者的清單都是封閉的。",
+      "Do 用等寬字體（tabular-nums）排時間碼、時長、版本代號、解析度與階段數字，其餘文字一律系統堆疊。",
+      "Do 新增元素前先從既有的兩個矩形圓角（8px 容器、6px 控制項）選一個；需要畫圓就用 --radius-round。",
+      "Do 狀態一律「畫出來的記號 ＋ 繁體中文文字」成對出現，記號用 currentColor 上色並標 aria-hidden，讓顏色不是唯一訊號。",
+      "Do 讓按鈕文字說出它會做的事（「取得原文字幕」、「依此摘要匯出影片」），錯誤訊息說出問題與恢復方式；介面文字維持繁體中文。",
+      "Do 讓深淺兩套 token 都跟隨系統偏好，並在深色模式量測對比（現況：內文 6.32–16.14:1，畫出來的記號 7.69–14.36:1）。"
+    ],
+    "donts": [
+      "Don't 加任何表面陰影、模糊或玻璃。唯一的 box-shadow 是畫校準十字垂直兩臂的筆（.worksheet::after），不得被當成高程樣式繼承。",
+      "Don't 引入藍色，或把紅／綠當成「強調色」使用；紅與綠各自只有封閉的一份用途清單。",
+      "Don't 用字符或 emoji 當狀態圖示——記號要畫出來（圓環、打勾、叉、雙槓、圓點），且不得自帶色相。",
+      "Don't 把等寬字體用在內文、標籤或按鈕文字上；它不是風格，是量測工具。",
+      "Don't 新增第三個矩形圓角值、膠囊造型或漸層邊框。",
+      "Don't 使用 1.5rem 以上的字級，也不要用佔位文字取代標籤。",
+      "Don't 讓登錄列的紅記號在沒有 data-current 時露面——沒有進行中的工作就不該有記號。",
+      "Don't 在 60rem 以上把三欄收成單欄或分頁；同時可見是這張表的前提。",
+      "Don't 讓動態超出狀態：沒有 @keyframes、沒有裝飾性動畫，紅記號的滑動在 prefers-reduced-motion: reduce 下必須關閉。",
+      "Don't 直接顯示例外訊息原文；錯誤一律使用產品自己的語言，並保留已完成的資產。"
+    ]
+  }
+}
