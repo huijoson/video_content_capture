@@ -468,12 +468,12 @@ def create_app(
         if settings.gemini_api_key is None:
             raise HTTPException(409, "請在專案 .env 設定 GEMINI_API_KEY 並重啟服務")
         try:
-            source_id = library.get_video(video_id)["translation_source_version_id"]
-            if source_id is None:
+            source = library.translation_source_version(video_id)
+            if source is None:
                 raise ValueError("Select source")
             job = translation.create(
                 video_id,
-                str(source_id),
+                str(source["id"]),
                 public_text(body.language, settings),
                 regenerate=body.regenerate,
             )
@@ -512,14 +512,14 @@ def create_app(
     @app.post("/api/videos/{video_id}/exports/preview")
     def preview_export(video_id: str, body: ExportRequest) -> dict[str, object]:
         try:
-            source_id = library.get_video(video_id)["translation_source_version_id"]
+            source = library.translation_source_version(video_id)
             return exporter.preview(
                 video_id,
                 body.asset_id,
                 body.target_version_ids,
                 body.include_original,
                 body.original_version_id,
-                str(source_id) if source_id else None,
+                str(source["id"]) if source else None,
                 body.container,
                 body.subtitle_form,
             )

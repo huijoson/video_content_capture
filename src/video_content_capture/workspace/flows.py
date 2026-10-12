@@ -176,13 +176,10 @@ class FlowService:
 
     def _frozen_source_version(self, video: Record) -> str | None:
         """An already selected complete original is part of the frozen plan (人工／匯入)."""
-        selected = video["translation_source_version_id"]
-        if selected is None:
+        version = self.library.translation_source_version(str(video["id"]))
+        if version is None or not version["complete"] or version["source_type"] == "translation":
             return None
-        version = self.library.get_subtitle_version(str(selected))
-        if not version["complete"] or version["source_type"] == "translation":
-            return None
-        return str(selected)
+        return str(version["id"])
 
     def confirm(
         self, video_id: str, height: int | None = None, target_language: str | None = None

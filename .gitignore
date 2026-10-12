@@ -54,6 +54,10 @@ docs/checkpoints/
 **/.impeccable/*.png
 **/.impeccable/review/
 **/.impeccable/questions/
+# session/ is scratch state: only the direction contract is published as the durable
+# "why" behind the visual world. Roll metadata (seed.txt) must never reach history.
+**/.impeccable/session/*
+!**/.impeccable/session/brief.md
 **/.impeccable/live/server.json
 **/.impeccable/live/sessions/
 **/.impeccable/live/previews/

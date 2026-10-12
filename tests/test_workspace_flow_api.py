@@ -851,3 +851,30 @@ def test_cancelling_a_running_stage_ends_the_flow_before_the_answer(tmp_path: Pa
         assert client.get(f"/api/flows/{flow_id}").json()["flow"]["status"] == "cancelled"
         adapter.release.set()
         assert confirm(client, video["id"], target_language="en").json()["busy"] is False
+
+
+def test_dangling_translation_source_pointer_does_not_brick_the_flow(tmp_path: Path) -> None:
+    """A source pointer whose version row is gone must not turn /flow into a 404.
+
+    `videos.translation_source_version_id` can outlive its `subtitle_versions` row (stale
+    data from an earlier build), which made the read-only confirm screen answer 404
+    「影片不存在或尚未查詢來源」 for a video that opens fine everywhere else. The other
+    readers of this pointer degrade instead: /translations and /exports/preview answer 400.
+    """
+    adapter = FlowAdapter("en")
+    client, library = make_flow_client(tmp_path, adapter, FakeFFmpeg())
+    with client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        video_id = str(video["id"])
+        with library._connect() as connection:
+            connection.execute(
+                "UPDATE videos SET translation_source_version_id=? WHERE id=?",
+                ("0" * 32, video_id),
+            )
+        plan = confirm(client, video_id, target_language="zh-TW")
+        assert plan.status_code == 200, plan.text
+        assert plan.json()["original_source"] == "platform_manual"
+        # The stale pointer self-heals, exactly like a dangling conversation pointer does.
+        assert library.get_video(video_id)["translation_source_version_id"] is None
