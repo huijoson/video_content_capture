@@ -109,3 +109,62 @@ def test_config_errors_never_include_secret(
         load_settings(tmp_path)
     assert secret not in str(caught.value)
     assert secret not in repr(caught.value)
+
+
+def test_environment_key_shadowing_a_different_dotenv_key_is_flagged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shell variable wins over .env, so a differing value has to be announced.
+
+    The failure is silent and misleading: the app reads the environment key while the
+    user edits the .env that the 「Gemini 金鑰無效」 message points at, so every Gemini
+    call keeps failing with a key the user has already replaced.
+    """
+    (tmp_path / ".env").write_text("GEMINI_API_KEY=fake-file-key\n")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-environment-key")
+    settings = load_settings(tmp_path)
+    assert settings.gemini_api_key.get_secret_value() == "fake-environment-key"
+    assert settings.gemini_key_source == "environment"
+    assert settings.gemini_key_shadowed is True
+    assert "fake-environment-key" not in repr(settings)
+    assert "fake-file-key" not in repr(settings)
+
+
+def test_matching_environment_and_dotenv_keys_are_not_flagged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same key in both places is not a trap, so it must not warn."""
+    (tmp_path / ".env").write_text("GEMINI_API_KEY=fake-same-key\n")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-same-key")
+    settings = load_settings(tmp_path)
+    assert settings.gemini_key_source == "environment"
+    assert settings.gemini_key_shadowed is False
+
+
+def test_dotenv_key_alone_is_not_flagged(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("GEMINI_API_KEY=fake-file-key\n")
+    settings = load_settings(tmp_path)
+    assert settings.gemini_key_source == ".env"
+    assert settings.gemini_key_shadowed is False
+
+
+def test_absent_key_reports_no_source(tmp_path: Path) -> None:
+    settings = load_settings(tmp_path)
+    assert settings.gemini_api_key is None
+    assert settings.gemini_key_source is None
+    assert settings.gemini_key_shadowed is False
+
+
+def test_empty_environment_key_disables_the_dotenv_key_and_is_flagged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty environment variable wins too, and clears the key the .env still holds."""
+    (tmp_path / ".env").write_text("GEMINI_API_KEY=fake-file-key\n")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    settings = load_settings(tmp_path)
+    assert settings.gemini_api_key is None
+    assert settings.gemini_key_source is None
+    assert settings.gemini_key_shadowed is True

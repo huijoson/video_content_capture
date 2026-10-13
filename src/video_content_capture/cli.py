@@ -584,6 +584,15 @@ def _run_report_command(
 # A type alias kept for clarity in factory signatures.
 ProgressCallback = Callable[..., None]
 
+# The environment wins over the project .env, so a stale shell variable keeps Gemini
+# failing with a key the user has already replaced in .env. Name neither value.
+SHADOWED_KEY_WARNING = (
+    "warning: GEMINI_API_KEY is set in the environment and overrides the project .env,\n"
+    "         so the .env key is not in use (an empty value disables the key entirely).\n"
+    "         Unset it in the shell that launched this command, or restart the editor\n"
+    "         that started it: a new terminal inherits the editor's environment."
+)
+
 
 @app.command()
 def serve(
@@ -610,6 +619,8 @@ def serve(
             qa_model=qa_model,
         )
         application = create_app(settings)
+        if settings.gemini_key_shadowed:
+            typer.echo(SHADOWED_KEY_WARNING, err=True)
         uvicorn.run(
             application,
             host="127.0.0.1" if settings.host == "localhost" else settings.host,

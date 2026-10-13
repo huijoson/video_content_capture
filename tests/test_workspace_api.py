@@ -245,3 +245,39 @@ def test_serve_localhost_binds_numeric_loopback_without_dns(
     )
     assert result.exit_code == 0, result.output
     assert hosts == ["127.0.0.1"]
+
+
+def test_serve_warns_when_the_environment_shadows_the_dotenv_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The user edits .env, so a quieter override keeps them debugging the wrong file."""
+    import uvicorn
+
+    from video_content_capture import cli as cli_module
+
+    (tmp_path / ".env").write_text("GEMINI_API_KEY=fake-file-key\n")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-environment-key")
+    monkeypatch.setattr(uvicorn, "run", lambda application, **kwargs: None)
+    result = CliRunner().invoke(cli, ["serve", "--project-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert cli_module.SHADOWED_KEY_WARNING in result.output
+    assert "fake-environment-key" not in result.output
+    assert "fake-file-key" not in result.output
+
+
+def test_serve_is_quiet_when_only_the_dotenv_supplies_the_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import uvicorn
+
+    from video_content_capture import cli as cli_module
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    (tmp_path / ".env").write_text("GEMINI_API_KEY=fake-file-key\n")
+    monkeypatch.setattr(uvicorn, "run", lambda application, **kwargs: None)
+    result = CliRunner().invoke(cli, ["serve", "--project-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert cli_module.SHADOWED_KEY_WARNING not in result.output

@@ -23,6 +23,11 @@ class WorkspaceSettings:
     translation_model: str = "gemini-3.5-flash-lite"
     qa_model: str = "gemini-3.8-flash"
     gemini_api_key: SecretStr | None = field(default=None, repr=False)
+    # Where the key above was read from, and whether an environment variable won over a
+    # different value in the project .env. `load_settings` stays a pure read; callers do
+    # the announcing, so tests and the app share one answer.
+    gemini_key_source: str | None = None
+    gemini_key_shadowed: bool = False
 
 
 def validate_binding(host: str, port: int) -> None:
@@ -58,9 +63,21 @@ def load_settings(
         raise ConfigError("Cannot read project .env") from None
 
     def value(name: str, default: str) -> str:
+        """An environment variable wins over `.env`; one set to "" wins and clears it."""
         return os.environ.get(name, values.get(name) or default)
 
     raw_key = value("GEMINI_API_KEY", "").strip()
+    environment_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    file_key = (values.get("GEMINI_API_KEY") or "").strip()
+    # `value` reads the environment first, so the effective key comes from the environment
+    # whenever it holds a value. An environment variable set to "" wins too and clears the
+    # key outright, which is why a shadowing environment entry is reported either way.
+    key_source = ("environment" if environment_key else ".env") if raw_key else None
+    key_shadowed = bool(
+        file_key
+        and "GEMINI_API_KEY" in os.environ
+        and (not environment_key or environment_key != file_key)
+    )
     effective_host = host if host is not None else value("VCC_HOST", "127.0.0.1")
     try:
         effective_port = port if port is not None else int(value("VCC_PORT", "8765"))
@@ -93,4 +110,6 @@ def load_settings(
         translation_model=translation,
         qa_model=qa,
         gemini_api_key=SecretStr(raw_key) if raw_key else None,
+        gemini_key_source=key_source,
+        gemini_key_shadowed=key_shadowed,
     )

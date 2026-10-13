@@ -326,6 +326,9 @@ stateDiagram-v2
   `GOOGLE_API_KEY` 優先於 `GEMINI_API_KEY`，因此不能依賴 SDK 自動讀取；
   `GOOGLE_API_KEY` 不屬於本產品契約，不作為後備。
   只顯示「已設定／未設定」及模型名稱；修改 `.env` 後重啟服務生效。
+  程序環境同名變數優先於 `.env`，設為空字串時即停用金鑰；啟動時若覆蓋了 `.env` 值，
+  須在錯誤輸出印出不含金鑰值的警告與排除方式（改 `.env` 無效時才找得到原因）。
+  「金鑰無效」文案要指出此覆蓋，避免使用者只重查 `.env`。
 - 模型預設使用固定 stable ID，不用 `latest` alias；候選 ID 的帳戶權限、品質與
   quota 尚未實測，實作時以真實 key 驗證後才定案。
 - 明確關閉 SDK 自動重試（`HttpRetryOptions.attempts` 設為 1，該值含第一次請求），

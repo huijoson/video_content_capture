@@ -161,6 +161,12 @@ UTF-8 SRT／VTT、以選定版本進行 Gemini 翻譯與影片問答，並確認
 - `VCC_HOST`／`VCC_PORT`：預設 `127.0.0.1`／`8765`。
 
 可用 `--library-dir`、`--translation-model`、`--qa-model` 覆寫非金鑰設定。
+
+程序環境的同名變數會蓋過 `.env`，設為空字串時更會直接停用金鑰；`serve` 啟動時若
+偵測到這種覆蓋，會在錯誤輸出印出警告（不含金鑰值）。改了 `.env` 卻仍顯示「金鑰無效」
+或「缺少金鑰」時，先在啟動服務的 shell 執行 `unset GEMINI_API_KEY`；由編輯器啟動的
+終端會繼承編輯器環境，只開新終端無效，需完整結束並重開編輯器。
+
 修改 `.env` 後需重啟服務；模型帳戶權限尚未實測。服務只綁定 loopback，
 `localhost` 固定綁定 `127.0.0.1`；Host／Origin 使用相同主機與 port，寫入請求必須
 提供同源 Origin。不開放 CORS，不信任代理標頭，停用 access log。
