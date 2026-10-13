@@ -71,6 +71,13 @@
   --pane-library: minmax(13rem, 1fr);
   --pane-playback: minmax(22rem, 2.2fr);
   --pane-qa: minmax(17rem, 1.3fr);
+  /* From the viewport's top edge to the workspace's first rule: the page header and the
+     version register. Measured with the Gemini notice hidden — the state where the composer
+     is usable at all. If the header grows past it (that notice, a longer register), the
+     composer below sticks to the foot of the viewport instead of leaving the screen. */
+  --shell-band: 18.5rem;
+  --qa-pane-floor: 26rem;
+  --qa-message-floor: 8rem;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -367,7 +374,10 @@ button[aria-pressed="true"] {
   background: var(--color-sheet);
   border: 1px solid var(--color-rule);
   border-radius: var(--radius);
-  overflow: hidden;
+  /* clip, not hidden: the sheet still clips to its rounded corner, but it stays a plain
+     clipping box rather than a scroll container, so a pane can pin its composer to the
+     viewport floor when the header leaves less room than the pane's own height. */
+  overflow: clip;
 }
 .pane { padding: var(--space-4); min-width: 0; }
 .pane + .pane { border-left: 1px solid var(--color-rule); }
@@ -380,6 +390,9 @@ button[aria-pressed="true"] {
   margin: var(--space-6) 0 0;
   padding-top: var(--space-3);
 }
+/* A folded block is one ruled line: stacked together they read as one ledger, so they
+   close up; opening one gets it back the air a working block needs. */
+.card.panel:not([open]) { margin-top: var(--space-3); }
 .subform {
   border-top: 1px solid var(--color-rule);
   margin-top: var(--space-5);
@@ -398,7 +411,7 @@ button[aria-pressed="true"] {
 .panel > summary::-webkit-details-marker { display: none; }
 .panel > summary:hover .panel-hint { color: var(--color-ink); }
 /* The block's own heading sits in the summary, so it must not add a second margin. */
-.panel > summary > h3 { margin: 0; }
+.panel > summary > h3, .panel > summary > h4 { margin: 0; }
 .panel-caret {
   width: .5em;
   height: .5em;
@@ -610,7 +623,44 @@ ul, ol { padding-left: var(--space-6); }
 .subtitle-list > li > button, .subtitle-list > li > a { font-size: var(--font-size-small); }
 .subtitle-list > li > a { margin-left: var(--space-2); }
 
+/* One-click flow: the whole production run on one bench card. Its handle is the choices
+   readback, so taking every default costs no interaction; the log folds itself away when
+   the run finishes and only the artifact line stays. */
+.flow { margin-top: var(--space-4); }
+/* A block's name written as a column head: not a title, but the name of a row of data. */
+.panel-label {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-micro);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  white-space: nowrap;
+}
+/* Folded rows that carry a readback: caret, name, the values read back, the handle hint. */
+#flow-choices > summary, #qa-setup > summary { grid-template-columns: 1em auto minmax(0, 1fr) auto; }
+.flow-action { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.flow-action > button { margin: 0; }
+#flow-summary { margin: var(--space-2) 0 0; }
+#flow-log { border-top: 1px solid var(--color-rule); margin-top: var(--space-3); padding-top: var(--space-2); }
+#flow-log > summary { grid-template-columns: 1em auto minmax(0, 1fr); }
+/* Two short fields share one ruled row; the row wraps to stacked cells when narrow. */
+.field-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: flex-end; }
+.field-row > * { flex: 1 1 10rem; min-width: 0; }
+.field-row button { flex: 0 0 auto; width: auto; margin: 0; }
+
+/* The player's own annotation: one line beside its action instead of a stacked block. */
+#preview-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+}
+#preview-panel[hidden] { display: none; }
+#preview-panel p { flex: 1 1 18rem; margin: 0; }
+#preview-panel button { margin: 0; }
+
 /* Flow stages: label at the left, state and figures in their own columns. */
+#flow-stages { margin: var(--space-2) 0 0; }
 #flow-stages > li {
   display: grid;
   grid-template-columns: 1.2em minmax(0, 1fr) auto 4.5rem;
@@ -628,9 +678,30 @@ ul, ol { padding-left: var(--space-6); }
 #flow-stages .stage-figure { color: var(--color-ink-muted); text-align: right; font-variant-numeric: tabular-nums; }
 #flow-stages .stage-error { grid-column: 2 / -1; }
 
-#qa-messages { padding-left: var(--space-6); }
+/* The Q&A pane is one frame with a fixed height: the conversation is the only thing that
+   scrolls, and the composer keeps its place at the foot of the pane. Asking again therefore
+   never means scrolling the page to find the box again. */
+#qa-pane {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--shell-band));
+  height: calc(100dvh - var(--shell-band));
+  min-height: var(--qa-pane-floor);
+}
+#qa-pane > *:not(#qa-messages) { flex: 0 0 auto; }
+#qa-messages {
+  flex: 1 1 auto;
+  min-height: var(--qa-message-floor);
+  overflow-y: auto;
+  /* A scroll that reaches the end of the conversation must not carry on into the page. */
+  overscroll-behavior: contain;
+  padding-left: var(--space-6);
+  /* The scroller is a browser surface too: a thin rule on recess paper, drawn from the palette. */
+  scrollbar-color: var(--color-rule-strong) var(--color-recess);
+  scrollbar-width: thin;
+}
 #qa-messages > li { padding: var(--space-3) 0; border-bottom: 1px solid var(--color-rule); }
-#qa-messages h4 { margin: var(--space-5) 0 var(--space-1); }
+#qa-messages h4 { margin: var(--space-3) 0 var(--space-1); }
 #qa-messages blockquote {
   margin: var(--space-2) 0;
   padding: var(--space-2) var(--space-3);
@@ -649,6 +720,22 @@ ul, ol { padding-left: var(--space-6); }
 }
 #qa-messages p { max-width: var(--measure); }
 #qa-status, #qa-messages p { white-space: pre-wrap; }
+/* Where an answer stands: the conversation's own version once per answer, not once per quote. */
+.qa-provenance { color: var(--color-ink-muted); font-size: var(--font-size-small); }
+/* The composer's own line: the one action and the hint that explains it, side by side. It
+   holds the foot of the pane, and holds the foot of the viewport if the pane runs past it. */
+#qa-form {
+  position: sticky;
+  bottom: 0;
+  background: var(--color-sheet);
+  border-top: 1px solid var(--color-rule);
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+}
+.qa-action { display: flex; align-items: flex-start; gap: var(--space-3); }
+/* The one action keeps its own width; only the hint beside it takes the slack. */
+.qa-action > button { flex: 0 0 auto; margin: 0; white-space: nowrap; }
+.qa-action .hint { flex: 1 1 auto; margin: 0; }
 
 dialog {
   background: var(--color-sheet);

@@ -161,20 +161,33 @@ function statusNode(status, text) {
 /* Folded panels: the header line stays on the sheet and the body unfolds under it. Each
    video remembers which panels its reader folded, so a choice made once stays made. */
 const panelNames = {
-  choices: "flow-choices", subtitles: "subtitles-panel", export: "export-panel",
-  manage: "manage-panel", jobs: "jobs-panel",
+  choices: "flow-choices", stages: "flow-log", subtitles: "subtitles-panel",
+  export: "export-panel", manage: "manage-panel", jobs: "jobs-panel",
+  setup: "qa-setup",
 };
 let panelOwner = null;
 let panelState = {};
 
 const panelStorageKey = (videoId) => `vcc.panels.v1:${videoId}`;
 
+// Only this video's work belongs on this sheet; another film's ledger is not ours to show.
+function visibleJobs() {
+  return currentVideo ? jobs.filter((job) => job.video_id === currentVideo.id) : jobs;
+}
+
+// A run in flight, or one that stopped short, is the one thing the reader must not have to
+// go looking for; a finished ledger is history and stays folded.
+function runNeedsAttention() {
+  const status = flowStatus?.flow.status;
+  return activeStatuses.has(status) || ["failed", "cancelled", "interrupted"].includes(status);
+}
+
 function panelDefault(name) {
-  if (name !== "jobs") return false;
-  // Work in progress is the one thing the reader must not have to go looking for; a
-  // finished ledger is history and stays folded.
-  const visible = currentVideo ? jobs.filter((job) => job.video_id === currentVideo.id) : jobs;
-  return visible.some((job) => activeStatuses.has(job.status));
+  if (name === "jobs") return visibleJobs().some((job) => activeStatuses.has(job.status));
+  if (name === "stages") return runNeedsAttention();
+  // With nothing to ask about, the one thing the pane can offer is the picker behind it.
+  if (name === "setup") return !element("qa-no-source").hidden;
+  return false;
 }
 
 function panelIntended(name) {
@@ -200,8 +213,13 @@ function applyPanels() {
   }
   for (const [name, id] of Object.entries(panelNames)) {
     const node = element(id);
-    // The choices line is the one panel that only exists once there is a video to read.
-    node.hidden = name === "choices" && !currentVideo;
+    // These three only exist once there is something to fold behind them: a video to read,
+    // a run to log, a job to follow. Every other block always shows its ruled line.
+    node.hidden = name === "choices" ? !currentVideo
+      : name === "stages" ? !flowStatus
+      : name === "jobs" ? !visibleJobs().length
+      : false;
+    if (node.hidden) continue;
     const open = panelIntended(name);
     if (node.open !== open) node.open = open;
   }
@@ -488,19 +506,20 @@ function renderVideo(video, preserveSelection = false) {
   options(element("flow-language"), flowLanguageChoices(video), element("flow-language").value, (entry) => entry.label);
   element("video-details").hidden = false;
   element("video-title").textContent = video.title;
-  element("video-source").textContent = `時長：${formatDuration(video.duration)} · YouTube`;
   const metadata = video.metadata || {};
   const resolutions = (metadata.resolutions || []).map((entry) => ({ ...entry, id: String(entry.height) }));
   const keptHeight = resolutions.some((entry) => entry.height === selectedHeight) ? selectedHeight : metadata.default_resolution;
   options(element("resolution"), resolutions, String(keptHeight), (entry) => `${entry.height}p`);
-  element("quality-help").textContent = metadata.above_1080p
-    ? "來源全部高於 1080p，已預選其中最低的解析度。"
-    : "預選不高於 1080p 的最高解析度；只列來源實際有的解析度，不放大。";
+  element("quality-help").textContent = !resolutions.length
+    ? "尚未取得來源格式；按「重新查詢來源格式」再查一次。"
+    : metadata.above_1080p
+      ? "來源全部高於 1080p，已預選其中最低的解析度。"
+      : "預選不高於 1080p 的最高解析度；只列來源實際有的解析度，不放大。";
   const audio = metadata.audio;
   element("audio-summary").textContent = audio
     ? `音軌（自動選擇）：${audio.language || "未知"} · ${codecLabels[audio.codec] || audio.codec} · ${audio.original ? "原音" : "原音未知"}${audio.default ? " · 預設軌" : ""}`
     : "音軌（自動選擇）：未知";
-  element("audio-help").textContent = "自動選原語言的預設軌，不使用配音軌；開始後固定來源版本，來源消失須重新查詢。";
+  element("audio-help").textContent = "自動選原語言的預設軌；開始後固定來源版本。";
   renderResolvedSource();
   // One saved asset per resolution; prefer the directly playable one.
   const assetsByHeight = new Map();
@@ -513,9 +532,15 @@ function renderVideo(video, preserveSelection = false) {
   const previous = sameVideo ? element("media-asset").value : null;
   const preferredAsset = assets.find((asset) => asset.id === previous) ||
     assets.find((asset) => asset.height === Number(element("resolution").value)) || assets[0];
-  options(element("media-asset"), assets, preferredAsset?.id,
-    (asset) => `${asset.height ? `${asset.height}p` : "解析度未知"}${asset.browser_playable ? "" : "（需相容預覽）"}`);
+  const assetLabel = (asset) => `${asset.height ? `${asset.height}p` : "解析度未知"}${asset.browser_playable ? "" : "（需相容預覽）"}`;
+  options(element("media-asset"), assets, preferredAsset?.id, assetLabel);
   element("media-asset").disabled = !assets.length;
+  // One saved resolution is not a choice: the film's own line carries it, no menu at all.
+  const severalAssets = assets.length > 1;
+  element("media-asset-field").hidden = !severalAssets;
+  element("video-source").textContent = severalAssets
+    ? `時長：${formatDuration(video.duration)} · YouTube`
+    : `時長：${formatDuration(video.duration)} · ${preferredAsset ? `已保存 ${assetLabel(preferredAsset)}` : "尚無影音"}`;
   renderPlayback(video);
   renderLibrary();
   renderSubtitles(video, preserveSelection && sameVideo);
@@ -529,7 +554,9 @@ function renderVideo(video, preserveSelection = false) {
 function renderResolvedSource() {
   const metadata = currentVideo?.metadata || {};
   const entry = (metadata.resolutions || []).find((item) => String(item.height) === element("resolution").value);
-  const resolved = entry?.[downloadSubtitleForm];
+  // The line describes the track-form artifact only; with 燒錄字幕 chosen there is no
+  // track to keep and the sentence would describe something the reader did not pick.
+  const resolved = element("flow-subtitle-form").value === downloadSubtitleForm ? entry?.[downloadSubtitleForm] : null;
   element("resolved-source").textContent = resolved
     ? `可切換字幕軌成品：${resolved.output_container.toUpperCase()}（${resolved.height}p · ${resolved.fps || "未知"} FPS · ${codecLabels[resolved.video_codec] || resolved.video_codec}＋${codecLabels[resolved.audio_codec] || resolved.audio_codec}）。系統自動選擇來源版本。`
     : "";
@@ -658,11 +685,10 @@ function renderFlowFacts() {
   facts.replaceChildren();
   if (!flowConfirm || flowConfirmVideoId !== currentVideo?.id) return;
   const form = element("flow-subtitle-form").value;
+  // Only what the sheet cannot already answer: the register carries the title, the
+  // duration, the original subtitles and the audio, so the facts stay three lines.
   const entries = [
-    `標題：${flowConfirm.title}`,
-    `時長：${formatDuration(flowConfirm.duration)}`,
     `原文字幕來源：${flowConfirm.original_source_label}`,
-    `音軌（自動選擇）：${flowConfirm.audio?.language || "未知"} · ${codecLabels[flowConfirm.audio?.codec] || flowConfirm.audio?.codec || "未知"}`,
     `輸出格式：${(flowConfirm.subtitle_forms?.[form] || flowConfirm.output_format).toUpperCase()}`,
     `預計步驟：${flowConfirm.steps.map((step) => flowStepLabels[step] || step).join(" → ")}`,
   ];
@@ -679,12 +705,14 @@ function renderFlow() {
   element("flow-summary").textContent = !currentVideo
     ? "尚未選取影片。"
     : selected
-      ? `開始後即固定以下選擇；之後的介面改選不影響進行中的流程。${language.busy ? "此影片已有一鍵流程正在進行。" : ""}`
+      ? language.busy
+        ? "已有一鍵流程正在進行；請先取消或等它完成。"
+        : "開始後固定以上選擇；之後改選不影響進行中的流程。"
       : "正在讀取確認內容…";
   const blocked = element("flow-blocked");
   blocked.hidden = !selected || !language.blocked_reason;
   blocked.textContent = language?.blocked_reason
-    ? `需要翻譯但尚未設定 Gemini 金鑰：${flowsBlockedMessage(language.blocked_reason)}`
+    ? flowsBlockedMessage(language.blocked_reason)
     : "";
   // 「原文＋目標」 needs a target language and an actual translation to mean anything.
   const hasTarget = Boolean(element("flow-language").value);
@@ -697,10 +725,13 @@ function renderFlow() {
   updateStartButton();
 }
 
+// A blocked flow names the step that unblocks it; the API's `blocked_reason` picks the words.
+const blockedMessages = {
+  missing_gemini_key: "需要翻譯但尚未設定 Gemini 金鑰：請在專案 .env 設定 GEMINI_API_KEY 並重啟服務。",
+};
+
 function flowsBlockedMessage(code) {
-  return code === "missing_gemini_key"
-    ? "請在專案 .env 設定 GEMINI_API_KEY 並重啟服務。"
-    : "請先完成設定。";
+  return blockedMessages[code] || "請先完成設定。";
 }
 
 function renderFlowStatus() {
@@ -709,7 +740,7 @@ function renderFlowStatus() {
   const payload = flowStatus;
   let summary = !payload
     ? "尚未開始一鍵流程。"
-    : `流程 ${statusLabels[payload.flow.status] || payload.flow.status} · ${payload.stages.filter((stage) => stage.status === "completed").length}/${payload.stages.length} 階段完成`;
+    : `流程${statusLabels[payload.flow.status] || payload.flow.status} · ${payload.stages.filter((stage) => stage.status === "completed").length}/${payload.stages.length} 階段`;
   if (payload?.flow.status === "interrupted") summary += " · 已中斷，需手動重試";
   else if (payload?.flow.status === "failed" && payload.flow.error_code) summary += ` · ${jobErrorLabel(payload.flow.error_code)}`;
   element("flow-status").textContent = summary;
@@ -756,11 +787,11 @@ function renderFlowStatus() {
 function renderFlowActions() {
   const actions = element("flow-actions");
   const status = flowStatus?.flow.status ?? null;
-  actions.hidden = !status;
-  if (!status) return;
   // A confirmation-required export can only be redone by choosing MKV, so no dead button.
   const retryable = ["failed", "cancelled", "interrupted"].includes(status) &&
     flowStatus.flow.error_code !== "container_confirmation_required";
+  // The row exists only while it holds a button: a run in flight, or one to retry.
+  actions.hidden = !(status === "running" || retryable);
   element("cancel-flow").hidden = status !== "running";
   element("retry-flow").hidden = !retryable;
 }
@@ -871,6 +902,7 @@ async function savePosition(force = false) {
 for (const id of ["resolution", "flow-language", "flow-subtitle-form"]) {
   element(id).addEventListener("change", () => {
     renderFlowChoicesLine();
+    renderResolvedSource();
     renderRegistry();
     refreshFlow().catch(showError);
   });
@@ -1017,9 +1049,16 @@ function invalidateExport() {
 }
 
 function updateTranslationButtons() {
-  for (const id of ["translate", "retranslate"]) {
-    element(id).disabled = !geminiConfigured || !currentVideo?.translation_source_version_id;
-  }
+  const source = currentVideo?.translation_source_version_id;
+  const language = element("subtitle-language").value;
+  // 翻譯 reuses an identical run; once that version exists, a new version is the only
+  // thing left to ask for — so only one of the two ever shows, like cancel and retry.
+  const existing = Boolean(source) && (currentVideo?.subtitles || []).some(
+    (version) => version.source_type === "translation" && version.parent_id === source && version.language === language);
+  const ready = geminiConfigured && Boolean(source);
+  element("translate").hidden = existing;
+  element("retranslate").hidden = !existing;
+  for (const id of ["translate", "retranslate"]) element(id).disabled = !ready;
 }
 
 function subtitleLabel(version) {
@@ -1144,17 +1183,30 @@ function renderSubtitles(video, preserveSelection = false) {
 for (const [id, selection] of [["translation-source", "translation-source"], ["export-target", "export-selection"]]) {
   element(id).addEventListener("change", () => chooseSubtitle(selection, element(id).value).catch(showError));
 }
-// Burned exports are one MP4; container only applies to tracks.
+// Burned exports are one MP4; container only applies to tracks, and the original version
+// is a question only once 「附加原文」 asks it.
 function updateExportForm() {
   const burned = element("export-form").value === "burned";
   if (burned) element("export-container").value = "";
   element("include-original").disabled = !currentVideo;
   element("export-container").disabled = burned;
+  element("export-container-field").hidden = burned;
+  element("export-original-field").hidden = !element("include-original").checked;
 }
 element("export-form").addEventListener("change", updateExportForm);
+element("include-original").addEventListener("change", updateExportForm);
 for (const id of ["include-original", "export-original", "subtitle-language", "export-container", "export-form"]) {
   element(id).addEventListener("change", invalidateExport);
 }
+
+// The version name defaults to the file's own name; the field is there to correct, not to type.
+let versionNameEdited = false;
+element("version-name").addEventListener("input", () => { versionNameEdited = true; });
+element("subtitle-file").addEventListener("change", () => {
+  const file = element("subtitle-file").files?.[0];
+  if (!file || versionNameEdited) return;
+  element("version-name").value = file.name.replace(/\.(srt|vtt)$/i, "").slice(0, 200);
+});
 
 element("subtitle-import-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1176,6 +1228,9 @@ element("subtitle-import-form").addEventListener("submit", async (event) => {
     currentVideo.subtitles = versions;
     renderSubtitles(currentVideo);
     await loadConversations(id);
+    versionNameEdited = false;
+    element("version-name").value = "";
+    element("subtitle-file").value = "";
     element("import-status").textContent = result.warnings?.length ? result.warnings.join("；") : "字幕已匯入；請明確選擇播放、翻譯來源或匯出用途。";
   } catch (error) { showError(error); }
   finally { button.disabled = false; }
@@ -1247,6 +1302,27 @@ function showQaError(error) {
   element("qa-status").textContent = error.message;
 }
 
+// The folded row reads back what this conversation stands on. The version's own name is only
+// worth its width once the row is open, where the picker shows it.
+function renderQaSource() {
+  const conversation = currentConversation;
+  const version = (currentVideo?.subtitles || []).find((item) => item.id === conversation?.source_version_id);
+  if (!conversation) {
+    appendSegments(element("qa-source-summary"), [{ text: "尚無問答依據", note: true }]);
+  } else if (!version) {
+    appendSegments(element("qa-source-summary"), [
+      { text: conversation.source_version_id.slice(0, 8), figures: true },
+    ]);
+  } else {
+    appendSegments(element("qa-source-summary"), [
+      { text: version.language },
+      { text: sourceTypeLabels[version.source_type] || version.source_type, gap: " · " },
+      { text: version.complete ? "完整" : "未完成", gap: " · " },
+      { text: version.id.slice(0, 8), figures: true, gap: " · " },
+    ]);
+  }
+}
+
 function updateQaControls() {
   const source = !!currentConversation?.source_version_id;
   const pending = currentConversation?.messages?.some((message) => message.status === "pending");
@@ -1282,9 +1358,10 @@ async function loadConversations(videoId) {
   if (!conversationId) {
     currentConversation = null;
     element("qa-messages").replaceChildren();
-    element("qa-source-summary").textContent = "尚無問答依據。";
+    renderQaSource();
     element("qa-status").textContent = "請取得／匯入字幕並設為問答依據。";
     updateQaControls();
+    applyPanels();
     return;
   }
   const conversation = await request(`/api/conversations/${controlled(conversationId)}`);
@@ -1295,8 +1372,7 @@ async function loadConversations(videoId) {
 function renderConversation(conversation) {
   if (conversation.video_id !== currentVideo?.id) return;
   currentConversation = conversation;
-  const version = (currentVideo.subtitles || []).find((item) => item.id === conversation.source_version_id);
-  element("qa-source-summary").textContent = `本串問答依據：${version ? subtitleLabel(version) : conversation.source_version_id}`;
+  renderQaSource();
   element("qa-source").value = conversation.source_version_id;
   const pending = conversation.messages.some((message) => message.status === "pending");
   const announcement = pending ? "問題已送出，正在等待完整且驗證通過的回覆。" : "可提出問題；回覆將先整份驗證。";
@@ -1309,6 +1385,8 @@ function renderConversation(conversation) {
     for (const message of conversation.messages) renderQaMessage(message, conversation);
   }
   updateQaControls();
+  // The picker's default fold follows whether there is anything to ask about yet.
+  applyPanels();
 }
 
 function paragraph(text) {
@@ -1325,7 +1403,7 @@ function citationTime(seconds) {
 function renderCitation(citation, conversation) {
   const details = document.createElement("details");
   const summary = document.createElement("summary");
-  summary.textContent = `引用 ${citationTime(citation.start)}–${citationTime(citation.end)} · 依據版本 ${conversation.source_version_id.slice(0, 8)}`;
+  summary.textContent = `引用 ${citationTime(citation.start)}–${citationTime(citation.end)}`;
   const quote = document.createElement("blockquote");
   quote.textContent = citation.text;
   const button = document.createElement("button");
@@ -1347,23 +1425,63 @@ function renderCitation(citation, conversation) {
   return details;
 }
 
+// A claim's evidence is one folded line: how many quotes stand behind it and the span they
+// cover. Opening it lists those quotes; opening a quote reads the saved text and can jump there.
+function renderCitationGroup(citations, conversation) {
+  const ordered = [...citations].sort((left, right) => left.start - right.start);
+  if (ordered.length === 1) return renderCitation(ordered[0], conversation);
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = `引用 ${ordered.length} 段 · ${citationTime(ordered[0].start)}–${citationTime(ordered[ordered.length - 1].end)}`;
+  details.append(summary);
+  for (const citation of ordered) details.append(renderCitation(citation, conversation));
+  return details;
+}
+
+// One line per answer, where sixty quotes used to repeat it: which saved version answered, and
+// whether earlier questions were in memory.
+function renderProvenance(message, conversation) {
+  const remembered = (message.memory_ids || []).length;
+  const node = paragraph(`依據版本 ${conversation.source_version_id.slice(0, 8)}`
+    + (remembered ? ` · 本次參考最近 ${remembered} 組問答` : ""));
+  node.className = "qa-provenance";
+  return node;
+}
+
+// While the reader is at the foot of the log, their own question and the answer that lands keep
+// the foot in view; scrolling up is a request to be left where they are.
+const QA_LOG_FOOT = 40;
+let qaFollowNewest = true;
+
+function followNewestQaMessage() {
+  if (!qaFollowNewest) return;
+  const box = element("qa-messages");
+  box.scrollTop = box.scrollHeight;
+}
+
+element("qa-messages").addEventListener("scroll", () => {
+  const box = element("qa-messages");
+  qaFollowNewest = box.scrollHeight - box.scrollTop - box.clientHeight < QA_LOG_FOOT;
+});
+
 function renderQaMessage(message, conversation) {
   const item = document.createElement("li");
   item.append(paragraph(`問題：${message.question}`));
   if (message.status === "completed" && message.response) {
-    item.append(paragraph(`本次參考最近 ${(message.memory_ids || []).length} 組問答`));
+    item.append(renderProvenance(message, conversation));
     if (!message.in_memory) item.append(paragraph("較早問答：不在記憶內（仍保存可閱讀）。"));
     for (const [field, title] of [["video_content", "影片內容"], ["supplemental_knowledge", "補充知識（未經網路查證）"], ["insufficient_evidence", "缺乏依據"]]) {
+      const entries = message.response[field] || [];
+      // A section with nothing in it costs a heading and a line saying so; leave it out.
+      if (!entries.length) continue;
       const section = document.createElement("section");
       const heading = document.createElement("h4");
       heading.textContent = title;
       section.append(heading);
-      const entries = message.response[field] || [];
-      if (!entries.length) section.append(paragraph("本次無此類回覆。"));
       for (const entry of entries) {
         section.append(paragraph(field === "video_content" ? entry.claim : entry));
-        if (field === "video_content") {
-          for (const citation of entry.citations) section.append(renderCitation(citation, conversation));
+        if (field === "video_content" && entry.citations.length) {
+          section.append(renderCitationGroup(entry.citations, conversation));
         }
       }
       item.append(section);
@@ -1386,6 +1504,7 @@ function renderQaMessage(message, conversation) {
     }
   }
   element("qa-messages").append(item);
+  followNewestQaMessage();
 }
 
 function qaErrorLabel(code) {
@@ -1468,6 +1587,7 @@ element("qa-form").addEventListener("submit", async (event) => {
     await request(`/api/conversations/${controlled(conversationId)}/messages`, "POST", { question });
     if (currentVideo?.id !== videoId || currentConversation?.id !== conversationId) return;
     element("question").value = "";
+    qaFollowNewest = true;
     await pollConversation();
   } catch (error) { showQaError(error); }
   finally { qaSubmitting = false; updateQaControls(); }
@@ -1560,12 +1680,13 @@ function forgetVideo(videoId) {
   currentConversation = null;
   qaMessageSignature = "";
   element("qa-messages").replaceChildren();
+  qaFollowNewest = true;
   for (const id of ["qa-source", "conversation-select"]) {
     element(id).replaceChildren();
     element(id).disabled = true;
   }
   element("qa-new-conversation").disabled = true;
-  element("qa-source-summary").textContent = "尚無問答依據。";
+  renderQaSource();
   element("qa-status").textContent = "尚未選取影片";
   updateQaControls();
   renderJobs();
