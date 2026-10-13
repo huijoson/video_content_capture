@@ -161,3 +161,35 @@ def test_one_click_flow_exposes_cancel_and_retry_controls() -> None:
     # A reloaded page adopts the video's latest flow so an interrupted one is visible.
     assert "latest_flow_id" in script
     assert "innerHTML" not in script
+
+
+def test_the_flow_stands_before_the_player_with_its_log_folded_in() -> None:
+    """The pane's one action is reachable without scrolling; its record stays folded away."""
+    markup = (STATIC / "index.html").read_text()
+    page = Elements()
+    page.feed(markup)
+    pane = markup[markup.index('id="video-details"') : markup.index('id="subtitle-panels"')]
+    assert pane.index('id="processing-form"') < pane.index('id="player"')
+    # 開始處理, its readback and its run log are one block: no second card for the same run.
+    assert pane.index('id="media-asset-field"') > pane.index("</form>")
+    assert page.by_id["flow-log"]["tag"] == "details"
+    assert "flow-progress-heading" not in page.by_id
+    # The block's own handle reads the four choices back, so the defaults cost no interaction.
+    assert 'id="flow-heading"' in pane[: pane.index("</details>")]
+    script = (STATIC / "workspace.js").read_text()
+    assert 'stages: "flow-log"' in script
+    assert "runNeedsAttention" in script
+    # The run log and the job ledger open only while there is work, and vanish when there is none.
+    assert "visibleJobs().length" in script
+
+
+def test_settings_that_do_not_apply_are_not_drawn_as_fields() -> None:
+    """One choice is not a choice: a menu of one, or a field of another form, is not shown."""
+    script = (STATIC / "workspace.js").read_text()
+    for control in ("media-asset-field", "export-container-field", "export-original-field"):
+        assert f'element("{control}").hidden' in script
+    # 翻譯 reuses an identical run, so only the applicable of the two ever shows.
+    assert 'element("translate").hidden = existing' in script
+    assert 'element("retranslate").hidden = !existing' in script
+    # The version name follows the file the reader picked, and stops following once it is edited.
+    assert "versionNameEdited" in script
