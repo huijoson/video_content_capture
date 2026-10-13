@@ -163,6 +163,18 @@ def test_one_click_flow_exposes_cancel_and_retry_controls() -> None:
     assert "innerHTML" not in script
 
 
+def test_a_blocked_flow_names_the_step_that_unblocks_it() -> None:
+    script = (STATIC / "workspace.js").read_text()
+    # One notice, chosen by the API's `blocked_reason`; never a message hardcoded to one cause.
+    assert "blockedMessages[code]" in script
+    assert "需要翻譯但尚未設定 Gemini 金鑰" in script
+    assert "source_choice_required:" in script and "取得所選平台字幕" in script
+    # A provider rejection is not an unsupported source: the two read differently.
+    assert "source_busy:" in script and "已自動重試" in script
+    assert "source_blocked:" in script
+    assert "source_unavailable:" in script
+
+
 def test_the_flow_stands_before_the_player_with_its_log_folded_in() -> None:
     """The pane's one action is reachable without scrolling; its record stays folded away."""
     markup = (STATIC / "index.html").read_text()

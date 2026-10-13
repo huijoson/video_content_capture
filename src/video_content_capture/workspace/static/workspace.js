@@ -59,6 +59,8 @@ const errorLabels = {
   format_unavailable: "所選來源格式無法取得，請重新查詢來源並重新選擇解析度。",
   media_failed: "影音下載、合併或驗證失敗，請檢查來源與本機媒體工具後重試。",
   source_unavailable: "來源不支援／無法取得，請確認影片非直播且無須登入，再重試。",
+  source_busy: "來源暫時無法取得（連線中斷或服務暫時無回應），已自動重試；請稍後按「重試流程」。",
+  source_blocked: "YouTube 暫時拒絕存取此影片（可能是機器人檢查或流量限制）；請稍後按「重試流程」。",
   container_confirmation_required: "MP4 封裝失敗；來源與字幕已保留。請在匯出區改選 MKV，重新確認摘要並建立匯出工作。",
   source_language_unknown: "原語系未知；請從平台字幕選單選擇人工或自動字幕，再取得所選字幕。",
   subtitle_unavailable: "字幕已消失或無法取得，請重新查詢並選擇平台字幕；不會回退辨識。",
@@ -728,6 +730,7 @@ function renderFlow() {
 // A blocked flow names the step that unblocks it; the API's `blocked_reason` picks the words.
 const blockedMessages = {
   missing_gemini_key: "需要翻譯但尚未設定 Gemini 金鑰：請在專案 .env 設定 GEMINI_API_KEY 並重啟服務。",
+  source_choice_required: "原語系未知但平台已有字幕：請在「字幕版本」選擇平台字幕並按「取得所選平台字幕」，再按「以此版本翻譯」指名來源，之後即可開始一鍵流程。",
 };
 
 function flowsBlockedMessage(code) {

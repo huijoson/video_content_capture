@@ -763,4 +763,9 @@
 ### Follow-ups（未修，待決定）
 - 下載失敗（`source_unavailable`）時 stderr 被丟棄、無 log，且 `retries=0`，無法診斷；
   本次首次失敗即為暫時性網路問題，手動重試成功。
+  **已修**：helper 改成在 stdout 回報固定字彙的原因（temporary／blocked／format_unavailable／
+  unavailable），`_api` 對暫時性失敗自動重試兩次（1s、3s，等待期間可取消），並以
+  `source_busy`／`source_blocked` 區分暫時性拒絕與來源不支援。一鍵流程的確認畫面在
+  「原語系未知且平台已有字幕」時顯示「平台字幕（待選擇）」並在開始前阻擋
+  （`source_choice_required`），不再下載完整影片後才於字幕階段失敗。
 - 翻譯失敗後僅能以 retry 重跑整塊，無塊內重試；`BATCH_SIZE` 為模組常數，未進 snapshot。
