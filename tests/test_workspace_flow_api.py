@@ -13,7 +13,7 @@ from pydantic import SecretStr
 from tests.test_workspace_burned_export import FakeFFmpeg
 from tests.test_workspace_exports import setup_service
 from tests.test_workspace_s2_api import FakeAdapter
-from tests.test_workspace_s3_api import ORIGIN
+from tests.test_workspace_s3_api import ORIGIN, SRT
 from video_content_capture.workspace.app import create_app
 from video_content_capture.workspace.config import load_settings
 from video_content_capture.workspace.exports import MediaExporter
@@ -21,6 +21,8 @@ from video_content_capture.workspace.flows import (
     BUSY_MESSAGE,
     MISSING_KEY_CODE,
     MISSING_KEY_MESSAGE,
+    SOURCE_CHOICE_CODE,
+    SOURCE_CHOICE_MESSAGE,
 )
 from video_content_capture.workspace.storage import Library
 from video_content_capture.workspace.subtitles import Cue
@@ -878,3 +880,122 @@ def test_dangling_translation_source_pointer_does_not_brick_the_flow(tmp_path: P
         assert plan.json()["original_source"] == "platform_manual"
         # The stale pointer self-heals, exactly like a dangling conversation pointer does.
         assert library.get_video(video_id)["translation_source_version_id"] is None
+
+
+def test_unknown_language_with_platform_tracks_requires_an_explicit_source(
+    tmp_path: Path,
+) -> None:
+    """The acquisition never guesses between platform tracks, so the plan cannot promise 本機辨識.
+
+    Flows 62cd661d and 9711393c of the real library died in the subtitles stage after the whole
+    video had been downloaded: the confirm screen announced local recognition, but the
+    acquisition refused to run it while platform tracks were offered.
+    """
+    adapter = FlowAdapter(None, track_language="zh-TW")
+    with TestClient(
+        create_app(load_settings(tmp_path), adapter, asr_adapter=FakeASR()),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        plan = confirm(client, video["id"], height=720, target_language="zh-TW").json()
+        assert plan["original_language"] is None
+        assert plan["original_source"] == "platform_choice"
+        assert plan["original_source_label"] == "平台字幕（待選擇）"
+        assert plan["blocked_reason"] == SOURCE_CHOICE_CODE
+        blocked = start_flow(client, video["id"], "zh-TW")
+        assert blocked.status_code == 400
+        assert blocked.json()["detail"] == SOURCE_CHOICE_MESSAGE
+        assert client.get("/api/jobs").json() == []
+
+
+def test_an_explicit_source_lifts_the_platform_choice_block(tmp_path: Path) -> None:
+    runner = FakeFFmpeg()
+    adapter = FlowAdapter(None, track_language="zh-TW")
+    settings = replace(load_settings(tmp_path), gemini_api_key=SecretStr("fake-api-sentinel"))
+    with TestClient(
+        create_app(
+            settings,
+            adapter,
+            translation_adapter=FakeTranslation(),
+            asr_adapter=FakeASR(),
+            media_exporter=MediaExporter(runner),
+        ),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        base = f"/api/videos/{video['id']}"
+        version = client.post(
+            base + "/subtitles/import?language=zh-TW&name=Correction&format=srt",
+            content=SRT,
+            headers=ORIGIN,
+        ).json()["version"]
+        client.post(
+            base + "/subtitles/translation-source",
+            json={"version_id": version["id"]},
+            headers=ORIGIN,
+        )
+        plan = confirm(client, video["id"], height=720, target_language="zh-TW").json()
+        assert plan["original_source"] == "import"
+        assert plan["original_source_label"] == "匯入"
+        assert plan["blocked_reason"] is None
+        started = start_flow(client, video["id"], "zh-TW")
+        assert started.status_code == 200, started.text
+        assert started.json()["snapshot"]["source_version_id"] == version["id"]
+        status = wait_for_flow(client, started.json()["flow"]["id"])
+        # The acquired original already is the target language, so translation is skipped.
+        assert [stage["status"] for stage in status["stages"]] == [
+            "completed",
+            "completed",
+            "pending",
+            "completed",
+        ]
+        # The chosen version is used as-is: the frozen plan never falls back to recognition.
+        assert adapter.subtitles_downloaded == 0
+
+
+def test_unknown_language_without_platform_tracks_still_plans_local_recognition(
+    tmp_path: Path,
+) -> None:
+    recognized: list[str | None] = []
+
+    class Recognizer:
+        def transcribe(self, path: Path, language: str | None, duration: float, cancel: Event):
+            recognized.append(language)
+            return "zh-TW", [Cue(id="c000001", start=1, end=2, text="本機辨識")]
+
+    runner = FakeFFmpeg()
+    adapter = FlowAdapter(None)
+    settings = replace(load_settings(tmp_path), gemini_api_key=SecretStr("fake-api-sentinel"))
+    with TestClient(
+        create_app(
+            settings,
+            adapter,
+            translation_adapter=FakeTranslation(),
+            asr_adapter=Recognizer(),
+            media_exporter=MediaExporter(runner),
+        ),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        plan = confirm(client, video["id"], height=720, target_language="zh-TW").json()
+        assert plan["original_language"] is None
+        assert plan["original_source"] == "asr"
+        assert plan["original_source_label"] == "本機辨識"
+        assert plan["blocked_reason"] is None
+        started = start_flow(client, video["id"], "zh-TW")
+        assert started.status_code == 200, started.text
+        assert started.json()["snapshot"]["source_version_id"] is None
+        status = wait_for_flow(client, started.json()["flow"]["id"])
+        assert [stage["status"] for stage in status["stages"]] == [
+            "completed",
+            "completed",
+            "pending",
+            "completed",
+        ]
+        assert recognized == [None]

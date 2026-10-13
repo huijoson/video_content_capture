@@ -35,10 +35,19 @@ ORIGINAL_SOURCE_LABELS: Record = {
     "platform_auto": "自動",
     "asr": "本機辨識",
     "import": "匯入",
+    # Not a source: the platform offers tracks and nothing says which one is the original.
+    "platform_choice": "平台字幕（待選擇）",
 }
 MISSING_KEY_CODE = "missing_gemini_key"
 MISSING_KEY_MESSAGE = "請在專案 .env 設定 GEMINI_API_KEY 並重啟服務"
 BUSY_MESSAGE = "此影片的一鍵流程正在進行中，請等待完成或先取消目前的工作"
+# The acquisition refuses to guess which platform track carries the original language, so the
+# confirm screen has to ask for one instead of promising local recognition it cannot run.
+SOURCE_CHOICE_CODE = "source_choice_required"
+SOURCE_CHOICE_MESSAGE = (
+    "原語系未知但平台已有字幕：請先在「字幕版本」取得平台字幕，按「以此版本翻譯」指名來源，"
+    "再開始一鍵流程"
+)
 RESOLUTION_MESSAGE = "請選擇來源實際有的解析度"
 TARGET_MESSAGE = "請選擇有效的目標語系"
 FLOW_CANCEL_MESSAGE = "這條流程已經結束"
@@ -193,6 +202,14 @@ class FlowService:
         original = self._expected_original(video, source)
         translate = None if target is None else self._needs_translation(source, target)
         missing = bool(translate) and not self.settings.gemini_api_key
+        # The source choice blocks the earlier stage, so it is the one worth announcing.
+        blocking = (
+            SOURCE_CHOICE_CODE
+            if original == "platform_choice"
+            else MISSING_KEY_CODE
+            if missing
+            else None
+        )
         burned = resolve_source(source, chosen, "burned")
         tracks = resolve_source(source, chosen, "tracks")
         return {
@@ -219,7 +236,7 @@ class FlowService:
             "bilingual_allowed": translate is not False,
             "bilingual_burned": BILINGUAL_BURNED,
             "gemini_configured": bool(self.settings.gemini_api_key),
-            "blocked_reason": MISSING_KEY_CODE if missing else None,
+            "blocked_reason": blocking,
             "busy": self.library.active_flow(video_id) is not None,
             "latest_flow_id": (
                 str(latest["id"]) if (latest := self.library.latest_flow(video_id)) else None
@@ -230,6 +247,8 @@ class FlowService:
         selected = self._frozen_source_version(video)
         if selected is not None:
             return str(self.library.get_subtitle_version(selected)["source_type"])
+        if self._platform_choice_required(source):
+            return "platform_choice"
         language = source.original_language
         tracks = matching_tracks(source.subtitles, language)
         if language is not None and any(not track.automatic for track in tracks):
@@ -238,12 +257,25 @@ class FlowService:
             return "platform_auto"
         return "asr"
 
+    @staticmethod
+    def _platform_choice_required(source: SourceMetadata) -> bool:
+        """Tracks are offered but no metadata says which one carries the original language.
+
+        `acquire_subtitles` refuses to run local recognition while a platform transcript may
+        already exist, and it will not pick between tracks it cannot identify. The plan must
+        therefore announce that choice instead of promising 「本機辨識」 and failing in the
+        subtitles stage, after the download has already run.
+        """
+        return source.original_language is None and bool(source.subtitles)
+
     def start(self, video_id: str, choice: FlowChoice) -> tuple[Record, Record]:
         """Freeze the choices, then create the download job the rest of the flow chains from."""
         video = self._video(video_id)
         source = self._source(video)
         target = self._target_language(choice.target_language)
         self._resolution(source, choice.height)
+        if self._expected_original(video, source) == "platform_choice":
+            raise FlowError(SOURCE_CHOICE_MESSAGE)
         translate = self._needs_translation(source, target)
         if choice.include_original and not translate:
             raise FlowError("目標語系與原文相同，雙語字幕無法啟用，請改用單一語系")
@@ -518,6 +550,8 @@ __all__ = [
     "FlowSnapshot",
     "MISSING_KEY_CODE",
     "MISSING_KEY_MESSAGE",
+    "SOURCE_CHOICE_CODE",
+    "SOURCE_CHOICE_MESSAGE",
     "bilingual_burning_supported",
     "flow_steps",
     "same_language",

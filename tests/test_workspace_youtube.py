@@ -380,3 +380,182 @@ def test_completed_video_stage_survives_audio_failure_and_retry(
     result = adapter.download(source, "v", "a", tmp_path, Event(), lambda *args: None, stages)
     assert downloads == ["v", "a", "a"]
     assert result.path.is_file()
+
+
+_HELPER_STUB = """\
+import os
+
+
+class DownloadError(Exception):
+    def __init__(self, message, exc_info=None):
+        super().__init__(message)
+        self.exc_info = exc_info
+
+
+class Response:
+    def __init__(self, status):
+        self.status = status
+
+
+class YoutubeDL:
+    def __init__(self, options):
+        self.options = options
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def extract_info(self, url, download=False):
+        {statement}
+"""
+
+_HELPER_EXCEPTIONS_STUB = """\
+class HTTPError(Exception):
+    def __init__(self, response=None, msg=None):
+        super().__init__(msg or "http error")
+        self.status = getattr(response, "status", None)
+
+
+class TransportError(Exception):
+    pass
+"""
+
+_HELPER_SCENARIOS = {
+    "bot_check": (
+        'raise DownloadError("ERROR: [youtube] Abc_123-xyz: '
+        "Sign in to confirm you're not a bot. cookie-secret-sentinel\")"
+    ),
+    "http_429": (
+        "from yt_dlp.networking.exceptions import HTTPError\n"
+        '        raise DownloadError("ERROR: HTTP Error 429: Too Many Requests", '
+        "exc_info=(HTTPError, HTTPError(Response(429)), None))"
+    ),
+    "transport": (
+        "from yt_dlp.networking.exceptions import TransportError\n"
+        '        raise DownloadError("ERROR: unable to download video data: Connection reset", '
+        "exc_info=(TransportError, TransportError('reset'), None))"
+    ),
+    "format": 'raise DownloadError("ERROR: Requested format is not available")',
+    "gone": (
+        'raise DownloadError("ERROR: [youtube] Abc_123-xyz: '
+        'Private video. Sign in if granted access")'
+    ),
+    "mystery": 'raise DownloadError("ERROR: [youtube] Abc_123-xyz: a failure nobody has seen yet")',
+}
+
+
+@pytest.mark.parametrize(
+    ("scenario", "reason"),
+    [
+        ("bot_check", "blocked"),
+        ("http_429", "temporary"),
+        ("transport", "temporary"),
+        ("format", "format_unavailable"),
+        ("gone", "unavailable"),
+        ("mystery", "unavailable"),
+    ],
+)
+def test_helper_reports_a_redacted_reason_instead_of_failing_silently(
+    tmp_path: Path, scenario: str, reason: str
+) -> None:
+    """stderr is discarded, so the failing helper must name the reason without echoing it."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    from video_content_capture.workspace import youtube
+
+    package = tmp_path / "yt_dlp"
+    (package / "networking").mkdir(parents=True)
+    (package / "networking" / "__init__.py").write_text("")
+    (package / "networking" / "exceptions.py").write_text(_HELPER_EXCEPTIONS_STUB)
+    (package / "__init__.py").write_text(_HELPER_STUB.format(statement=_HELPER_SCENARIOS[scenario]))
+    completed = subprocess.run(
+        [sys.executable, "-c", youtube._HELPER],
+        input=json.dumps({"mode": "query", "url": f"https://www.youtube.com/watch?v={ID}"}),
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        cwd=tmp_path,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {"error": reason}
+    assert "cookie-secret-sentinel" not in completed.stdout + completed.stderr
+
+
+def _payload(monkeypatch: pytest.MonkeyPatch, answers: list[str]) -> list[dict[str, object]]:
+    """Answer the helper with `answers` in order; a SourceError stops the script."""
+    import json
+
+    from video_content_capture.workspace import youtube
+
+    requests: list[dict[str, object]] = []
+
+    def fake_process(command: list[str], cancel: Event, **kwargs: object) -> str:
+        requests.append(json.loads(str(kwargs["request"])))
+        return answers[min(len(requests), len(answers)) - 1]
+
+    monkeypatch.setattr(youtube, "run_process", fake_process)
+    monkeypatch.setattr(youtube, "_TRANSIENT_DELAYS", (0.0, 0.0))
+    return requests
+
+
+def test_transient_helper_failure_is_retried_before_it_reaches_the_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = YtDlpAdapter()
+    requests = _payload(monkeypatch, ['{"error": "temporary"}'] * 3)
+    with pytest.raises(SourceError) as error:
+        adapter.query(f"https://youtu.be/{ID}")
+    assert error.value.code == "source_busy"
+    assert len(requests) == 3
+
+
+def test_transient_helper_failure_recovers_on_the_next_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    adapter = YtDlpAdapter()
+    requests = _payload(monkeypatch, ['{"error": "temporary"}', json.dumps(info())])
+    source = adapter.query(f"https://youtu.be/{ID}")
+    assert source.title == "Example"
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize(
+    ("reason", "code"),
+    [
+        ("blocked", "source_blocked"),
+        ("format_unavailable", "format_unavailable"),
+        ("unavailable", "source_unavailable"),
+    ],
+)
+def test_permanent_helper_failures_are_not_retried(
+    monkeypatch: pytest.MonkeyPatch, reason: str, code: str
+) -> None:
+    import json
+
+    adapter = YtDlpAdapter()
+    requests = _payload(monkeypatch, [json.dumps({"error": reason})] * 3)
+    with pytest.raises(SourceError) as error:
+        adapter.query(f"https://youtu.be/{ID}")
+    assert error.value.code == code
+    assert len(requests) == 1
+
+
+def test_cancelling_during_the_backoff_ends_the_stage_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = YtDlpAdapter()
+    requests = _payload(monkeypatch, ['{"error": "temporary"}'] * 3)
+    cancel = Event()
+    cancel.set()
+    with pytest.raises(SourceError) as error:
+        adapter.query(f"https://youtu.be/{ID}", cancel)
+    assert error.value.code == "cancelled"
+    assert len(requests) == 1

@@ -266,10 +266,61 @@ def parse_metadata(info: dict[str, object], url: str) -> SourceMetadata:
     )
 
 
+# A transient rejection is worth one more isolated run: a fresh extraction also refreshes the
+# signed media URLs that expire while the first attempt downloads.
+_TRANSIENT_DELAYS = (1.0, 3.0)
+_HELPER_ERRORS = {
+    # The provider's own words never cross this boundary; the helper names one of these.
+    "temporary": ("source_busy", "來源暫時無法取得，請稍後重試"),
+    "blocked": ("source_blocked", "YouTube 暫時拒絕存取此影片，請稍後重試"),
+    "format_unavailable": ("format_unavailable", "來源格式已消失，請重新選擇畫質／音軌"),
+    "unavailable": ("source_unavailable", "來源不支援／無法取得"),
+}
+
 # Python API is isolated so cancellation can terminate every descendant, including ffmpeg.
 _HELPER = r"""
 import json, sys
 import yt_dlp
+try:
+    # A 403 on a media URL is usually an expired link or throttling; the bot check is not.
+    from yt_dlp.networking.exceptions import HTTPError, TransportError
+except Exception:
+    HTTPError = TransportError = None
+_BLOCKED = ('not a bot',)
+_FORMAT = ('requested format is not available',)
+_UNAVAILABLE = ('private video', 'video unavailable', 'this video is unavailable',
+                'has been removed', 'removed by the uploader', 'members-only',
+                'not available in your country', 'this live event', 'premieres in',
+                'confirm your age', 'account has been terminated')
+_TEMPORARY = ('http error 403', 'http error 429', 'too many requests', 'timed out', 'timeout',
+              'connection reset', 'connection aborted', 'connection refused',
+              'temporary failure', 'unable to download', 'incomplete read',
+              'remote end closed', 'read timed out', 'urlopen error', 'eof occurred',
+              'getaddrinfo', 'network is unreachable')
+def reason(error):
+    cause = None
+    info = getattr(error, 'exc_info', None)
+    if isinstance(info, tuple) and len(info) > 1:
+        cause = info[1]
+    status = None if cause is None or HTTPError is None else getattr(cause, 'status', None)
+    text = str(error).casefold()
+    for marker in _BLOCKED:
+        if marker in text:
+            return 'blocked'
+    if isinstance(status, int) and (status == 403 or status == 429 or status >= 500):
+        return 'temporary'
+    if TransportError is not None and isinstance(cause, TransportError):
+        return 'temporary'
+    for marker in _FORMAT:
+        if marker in text:
+            return 'format_unavailable'
+    for marker in _UNAVAILABLE:
+        if marker in text:
+            return 'unavailable'
+    for marker in _TEMPORARY:
+        if marker in text:
+            return 'temporary'
+    return 'unavailable'
 class Quiet:
     def debug(self, message): pass
     def warning(self, message): pass
@@ -296,8 +347,8 @@ try:
             print(json.dumps(downloader.sanitize_info(info)))
         else:
             print(json.dumps({'path': downloader.prepare_filename(info)}))
-except Exception:
-    sys.exit(1)
+except Exception as error:
+    print(json.dumps({'error': reason(error)}))
 """
 
 
@@ -391,7 +442,8 @@ def _verify_stage(path: Path, name: str, selected: VideoFormat | AudioTrack, can
 
 
 class YtDlpAdapter:
-    def _api(self, request: dict[str, object], cancel: Event) -> dict[str, object]:
+    def _extract(self, request: dict[str, object], cancel: Event) -> dict[str, object]:
+        """One isolated run; a named rejection becomes the matching SourceError."""
         output = run_process([sys.executable, "-c", _HELPER], cancel, request=json.dumps(request))
         try:
             parsed: object = json.loads(output)
@@ -399,7 +451,24 @@ class YtDlpAdapter:
             raise SourceError("source_unavailable", "來源不支援／無法取得") from None
         if not isinstance(parsed, dict):
             raise SourceError("source_unavailable", "來源不支援／無法取得")
+        reason = parsed.get("error")
+        if isinstance(reason, str):
+            code, message = _HELPER_ERRORS.get(reason) or _HELPER_ERRORS["unavailable"]
+            raise SourceError(code, message)
         return parsed
+
+    def _api(self, request: dict[str, object], cancel: Event) -> dict[str, object]:
+        """Retry a transient rejection; a provider refusal is reported without another try."""
+        for delay in _TRANSIENT_DELAYS:
+            try:
+                return self._extract(request, cancel)
+            except SourceError as error:
+                if error.code != "source_busy":
+                    raise
+                cancel.wait(delay)
+                if cancel.is_set():
+                    raise SourceError("cancelled", "工作已取消") from None
+        return self._extract(request, cancel)
 
     def query(self, url: str, cancel: Event | None = None) -> SourceMetadata:
         _, canonical = parse_youtube_url(url)
