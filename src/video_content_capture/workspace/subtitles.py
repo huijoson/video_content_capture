@@ -26,6 +26,7 @@ from video_content_capture.workspace.youtube import (
 if TYPE_CHECKING:
     from video_content_capture.workspace.publication import ArtifactPublisher, PublishedArtifact
     from video_content_capture.workspace.storage import Library
+    from video_content_capture.workspace.subtitle_catalog import SubtitleCatalog
 
 MAX_SUBTITLE_BYTES = 10 * 1024 * 1024
 MAX_CUES = 100_000
@@ -382,14 +383,17 @@ class AcquisitionService:
         asr: ASRAdapter,
         scrub: Callable[[str], str] = scrub_text,
         publisher: ArtifactPublisher | None = None,
+        catalog: SubtitleCatalog | None = None,
     ) -> None:
         from video_content_capture.workspace.publication import ArtifactPublisher
+        from video_content_capture.workspace.subtitle_catalog import SubtitleCatalog
 
         self.library = library
         self.adapter = adapter
         self.asr = asr
         self.scrub = scrub
         self.publisher = publisher or ArtifactPublisher(library)
+        self.catalog = catalog or SubtitleCatalog(library)
 
     def create(
         self,
@@ -425,9 +429,18 @@ class AcquisitionService:
         # Explicit imported sources are authoritative and never fall back to the platform.
         selected_id = video["translation_source_version_id"]
         if selected_id is not None and snapshot["language"] is None:
+
+            def reuse(
+                connection: sqlite3.Connection, _published: tuple[PublishedArtifact, ...]
+            ) -> None:
+                self.catalog.record_acquisition(
+                    connection, video_id, str(job["id"]), str(selected_id)
+                )
+
             self.publisher.publish(
                 str(job["id"]),
                 attempt,
+                record=reuse,
                 owner_validator=lambda connection: not cancel.is_set(),
             )
             return
@@ -483,10 +496,8 @@ class AcquisitionService:
                     cues,
                     connection=connection,
                 )
-                connection.execute(
-                    "UPDATE videos SET translation_source_version_id=?, "
-                    "qa_version_id=? WHERE id=? AND translation_source_version_id IS NULL",
-                    (version["id"], version["id"], video_id),
+                self.catalog.record_acquisition(
+                    connection, video_id, str(job["id"]), str(version["id"])
                 )
 
             self.publisher.publish(

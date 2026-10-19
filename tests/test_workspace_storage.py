@@ -244,6 +244,7 @@ def test_migration_adds_flow_tracking_to_existing_database(tmp_path: Path) -> No
     with sqlite3.connect(upgraded.db_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert "flow_id" in {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+        assert "result" in {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
         assert connection.execute("SELECT count(*) FROM flows").fetchone()[0] == 0
     flow = upgraded._create_flow(video_id, "download", {"height": 720})
     assert flow["status"] == "running" and flow["stage"] == "download"

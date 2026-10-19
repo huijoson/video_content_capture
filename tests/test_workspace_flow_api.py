@@ -23,8 +23,11 @@ from video_content_capture.workspace.flows import (
     MISSING_KEY_MESSAGE,
     SOURCE_CHOICE_CODE,
     SOURCE_CHOICE_MESSAGE,
+    FlowService,
+    FlowSnapshot,
 )
 from video_content_capture.workspace.storage import Library
+from video_content_capture.workspace.subtitle_catalog import SubtitleCatalog
 from video_content_capture.workspace.subtitles import Cue
 from video_content_capture.workspace.translation import TranslationResponse
 from video_content_capture.workspace.youtube import SourceError, SourceMetadata, parse_metadata
@@ -285,6 +288,12 @@ def test_flow_chains_every_stage_and_exposes_the_finished_artifact(tmp_path: Pat
             version for version in versions if version["source_type"] == "platform_manual"
         )
         target = next(version for version in versions if version["source_type"] == "translation")
+        # The acquisition job names the version it published, so the flow never has to
+        # rediscover it from a list that a later import could change.
+        subtitle_job = next(
+            job for job in client.get("/api/jobs").json() if job["kind"] == "subtitles"
+        )
+        assert json.loads(subtitle_job["result"]) == {"subtitle_version_id": source["id"]}
         assert source["complete"] == 1
         assert target["complete"] == 1 and target["parent_id"] == source["id"]
         assert target["language"] == "zh-TW"
@@ -1045,3 +1054,45 @@ def test_configured_backend_recognises_media_without_platform_subtitles(
         assert started.status_code == 200, started.text
         status = wait_for_flow(client, started.json()["flow"]["id"], expect="failed")
         assert status["stages"][1]["error_code"] == code
+
+
+def test_acquired_source_uses_the_recorded_result_and_keeps_the_old_scan_fallback(
+    tmp_path: Path,
+) -> None:
+    library = Library(tmp_path / "library")
+    library.initialize()
+    video = library.import_video("abcdefghijk", "one", 10, "https://youtube.com", "{}")
+    video_id = str(video["id"])
+    first = library.create_subtitle_version(
+        video_id, "en", "first", "platform_manual", [Cue(id="one", start=1, end=2, text="a")]
+    )
+    second = library.create_subtitle_version(
+        video_id, "en", "second", "platform_auto", [Cue(id="one", start=1, end=2, text="b")]
+    )
+    service = FlowService(
+        library,
+        load_settings(tmp_path),
+        None,  # type: ignore[arg-type]
+        None,  # type: ignore[arg-type]
+        None,  # type: ignore[arg-type]
+        SubtitleCatalog(library),
+    )
+    snapshot = FlowSnapshot(
+        height=720,
+        target_language="zh-TW",
+        format_id="v",
+        audio_id="a",
+        container="mp4",
+        translate=True,
+    )
+    job = {
+        "id": "job",
+        "video_id": video_id,
+        "snapshot": json.dumps({}),
+        "result": None,
+    }
+
+    # Jobs written before schema 9 have no result and must keep the old lookup.
+    assert service._acquired_source("flow", snapshot, job) == second["id"]
+    job["result"] = json.dumps({"subtitle_version_id": first["id"]})
+    assert service._acquired_source("flow", snapshot, job) == first["id"]

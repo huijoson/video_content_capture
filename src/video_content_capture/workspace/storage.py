@@ -24,7 +24,14 @@ from uuid import uuid4
 from video_content_capture.redaction import scrub_text
 from video_content_capture.workspace.subtitles import Cue, validate_cues, validate_language
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
+# The four user-facing subtitle purposes, each with its own pointer (ADR 0002).
+SUBTITLE_SELECTIONS = {
+    "playback": "playback_version_id",
+    "translation_source": "translation_source_version_id",
+    "export": "export_version_id",
+    "qa": "qa_version_id",
+}
 # One-click flow stages reuse the existing job kinds, in this fixed order.
 FLOW_STAGES = ("download", "subtitles", "translation", "export")
 FLOW_ENDED = ("completed", "failed", "cancelled", "interrupted")
@@ -226,6 +233,11 @@ class Library:
                 "ORDER BY source_type='translation' DESC, created_at DESC, rowid DESC LIMIT 1) "
                 "WHERE playback_version_id IS NULL"
             )
+        if version < 9:
+            # Handlers record what they published so later stages need not rediscover it.
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+            if "result" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN result TEXT")
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @staticmethod
@@ -527,6 +539,15 @@ class Library:
                     (scrub_text(error), job_id, attempt, job_id, attempt),
                 )
 
+    def record_job_result(
+        self, connection: sqlite3.Connection, job_id: str, result: Record
+    ) -> None:
+        """Record what a running handler published inside its fenced transaction."""
+        connection.execute(
+            "UPDATE jobs SET result=? WHERE id=? AND status='running'",
+            (json.dumps(result, sort_keys=True, ensure_ascii=False), job_id),
+        )
+
     def publish_attempt(
         self,
         job_id: str,
@@ -783,13 +804,8 @@ class Library:
         )
 
     def set_subtitle_selection(self, video_id: str, selection: str, version_id: str | None) -> None:
-        columns = {
-            "playback": "playback_version_id",
-            "translation_source": "translation_source_version_id",
-            "export": "export_version_id",
-            "qa": "qa_version_id",
-        }
-        if selection not in columns:
+        column = SUBTITLE_SELECTIONS.get(selection)
+        if column is None:
             raise ValueError("Invalid subtitle selection")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -803,8 +819,18 @@ class Library:
                         (version_id, video_id),
                     )
                 )
+            connection.execute(f"UPDATE videos SET {column}=? WHERE id=?", (version_id, video_id))
+
+    def clear_subtitle_selection(self, video_id: str, selection: str, version_id: str) -> None:
+        """Clear a pointer only when it still names the version that went stale."""
+        column = SUBTITLE_SELECTIONS.get(selection)
+        if column is None:
+            raise ValueError("Invalid subtitle selection")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
-                f"UPDATE videos SET {columns[selection]}=? WHERE id=?", (version_id, video_id)
+                f"UPDATE videos SET {column}=NULL WHERE id=? AND {column}=?",
+                (video_id, version_id),
             )
 
     def exports(self, video_id: str) -> list[Record]:
@@ -863,7 +889,9 @@ class Library:
                 connection.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,))
             )
 
-    def ensure_conversation(self, video_id: str) -> Record | None:
+    def ensure_conversation(
+        self, video_id: str, source_version_id: str | None = None
+    ) -> Record | None:
         video = self.get_video(video_id)
         pointer = video["last_conversation_id"]
         if pointer:
@@ -880,7 +908,7 @@ class Library:
             ).fetchone():
                 return None
         try:
-            return self.create_conversation(video_id)
+            return self.create_conversation(video_id, source_version_id)
         except ValueError:
             return None
 
@@ -891,34 +919,6 @@ class Library:
                 "UPDATE videos SET last_conversation_id=NULL,qa_version_id=NULL "
                 "WHERE id=? AND last_conversation_id=?",
                 (video_id, conversation_id),
-            )
-
-    def translation_source_version(self, video_id: str) -> Record | None:
-        """The version this video pinned as its subtitle source, tolerating a stale pointer.
-
-        `videos.translation_source_version_id` can outlive its `subtitle_versions` row (a
-        purge that raced, or stale data from an older build). Callers that just want the
-        selection must see "nothing selected" instead of a `ValueError` — otherwise a
-        library video opens fine but its confirm screen answers 404. Only the source column
-        is cleared: `qa_version_id` is guarded by its own selection and may be live.
-        """
-        video = self.get_video(video_id)
-        selected = video["translation_source_version_id"]
-        if selected is None:
-            return None
-        try:
-            return self.get_subtitle_version(str(selected))
-        except ValueError:
-            self._clear_translation_source_pointer(video_id, str(selected))
-            return None
-
-    def _clear_translation_source_pointer(self, video_id: str, version_id: str) -> None:
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                "UPDATE videos SET translation_source_version_id=NULL "
-                "WHERE id=? AND translation_source_version_id=?",
-                (video_id, version_id),
             )
 
     def get_conversation(self, conversation_id: str) -> Record:

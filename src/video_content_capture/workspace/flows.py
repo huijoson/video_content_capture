@@ -23,6 +23,7 @@ from video_content_capture.workspace.quality import (
     resolve_source,
 )
 from video_content_capture.workspace.storage import Library, Record
+from video_content_capture.workspace.subtitle_catalog import SubtitleCatalog
 from video_content_capture.workspace.subtitles import (
     AcquisitionService,
     original_track,
@@ -170,9 +171,11 @@ class FlowService:
         acquisition: AcquisitionService,
         translation: TranslationService,
         exporter: ExportService,
+        catalog: SubtitleCatalog,
     ) -> None:
         self.library, self.settings = library, settings
         self.acquisition, self.translation, self.exporter = acquisition, translation, exporter
+        self.catalog = catalog
         self.enqueue: Callable[[Record], None] = lambda job: None
         self.cancel_job: Callable[[str], None] | None = None
 
@@ -222,8 +225,8 @@ class FlowService:
 
     def _frozen_source_version(self, video: Record) -> str | None:
         """An already selected complete original is part of the frozen plan (人工／匯入)."""
-        version = self.library.translation_source_version(str(video["id"]))
-        if version is None or not version["complete"] or version["source_type"] == "translation":
+        version = self.catalog.version_for(str(video["id"]), "translation_source")
+        if version is None or version["source_type"] == "translation":
             return None
         return str(version["id"])
 
@@ -518,8 +521,12 @@ class FlowService:
         """Which original the flow translates: frozen at start, else its own acquisition job."""
         if snapshot.source_version_id is not None:
             return snapshot.source_version_id
-        # Match the version this acquisition job published, not the UI's current selection,
-        # so a reselection made while the flow runs cannot change what it translates.
+        recorded = self._recorded_source(job)
+        if recorded is not None:
+            return recorded
+        # Older jobs did not record their result, so match the version this acquisition job
+        # published, not the UI's current selection. A reselection made while the flow runs
+        # then cannot change what it translates.
         acquired = json.loads(str(job["snapshot"]))
         wanted = acquired.get("language")
         acquired_kind = acquired.get("source_type")
@@ -534,6 +541,31 @@ class FlowService:
         if candidates:
             return str(candidates[-1]["id"])
         raise FlowError("找不到這條流程取得的原文字幕版本")
+
+    def _recorded_source(self, job: Record) -> str | None:
+        """The version id the acquisition job published with its result, if still valid."""
+        if job.get("result") is None:
+            return None
+        try:
+            result = json.loads(str(job["result"]))
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(result, dict):
+            return None
+        recorded = result.get("subtitle_version_id")
+        if not isinstance(recorded, str):
+            return None
+        try:
+            version = self.library.get_subtitle_version(recorded)
+        except ValueError:
+            return None
+        if (
+            version["complete"]
+            and version["source_type"] != "translation"
+            and str(version["video_id"]) == str(job["video_id"])
+        ):
+            return recorded
+        return None
 
     def _chain(self, flow_id: str, stage: str, job: Record) -> Record:
         self._attach(flow_id, job)

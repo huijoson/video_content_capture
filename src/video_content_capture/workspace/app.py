@@ -32,6 +32,7 @@ from video_content_capture.workspace.qa_jobs import QAService
 from video_content_capture.workspace.quality import SubtitleForm, quality_options, resolve_source
 from video_content_capture.workspace.security import LocalBoundary, configure_redaction, public_text
 from video_content_capture.workspace.storage import Library, Record
+from video_content_capture.workspace.subtitle_catalog import SubtitleCatalog
 from video_content_capture.workspace.subtitles import (
     AcquisitionService,
     ASRAdapter,
@@ -151,6 +152,7 @@ def create_app(
     configure_redaction(settings)
     library = Library(settings.library_dir)
     publisher = ArtifactPublisher(library)
+    catalog = SubtitleCatalog(library)
 
     downloader = adapter or YtDlpAdapter()
     translation = TranslationService(library, settings, translation_adapter, publisher)
@@ -161,6 +163,7 @@ def create_app(
         asr_adapter or ASR_ADAPTERS[settings.asr_backend](settings),
         scrub=lambda value: public_text(value, settings),
         publisher=publisher,
+        catalog=catalog,
     )
     downloads = DownloadService(library, downloader, publisher)
     exporter = ExportService(library, media_exporter, publisher)
@@ -179,7 +182,7 @@ def create_app(
         ),
         MediaQueue(library, handlers={"qa": qa.run}, name="workspace-qa"),
     )
-    flows = FlowService(library, settings, acquisition, translation, exporter)
+    flows = FlowService(library, settings, acquisition, translation, exporter, catalog)
     flows.bind(queue.enqueue)
     flows.bind_cancel(queue.cancel)
     queue.bind_completion(flows.on_job_finished)
@@ -229,7 +232,8 @@ def create_app(
 
     def opened(video_id: str) -> Record:
         try:
-            library.ensure_conversation(video_id)
+            catalog.ensure_conversation(video_id)
+            catalog.recover(video_id)
             video = library.get_video(video_id)
         except (KeyError, ValueError) as error:
             raise HTTPException(404, "影片不存在") from error
@@ -283,7 +287,7 @@ def create_app(
     @app.get("/api/videos/{video_id}/conversations")
     def conversations(video_id: str) -> Record:
         try:
-            library.ensure_conversation(video_id)
+            catalog.ensure_conversation(video_id)
             video = library.get_video(video_id)
             return {
                 "conversations": library.list_conversations(video_id),
@@ -452,7 +456,7 @@ def create_app(
 
     def select(video_id: str, selection: str, body: SelectionRequest) -> dict[str, bool]:
         try:
-            library.set_subtitle_selection(video_id, selection, body.version_id)
+            catalog.select(video_id, selection, body.version_id)
             return {"saved": True}
         except ValueError:
             raise HTTPException(400, "請選擇本影片的完整字幕版本") from None
@@ -483,7 +487,7 @@ def create_app(
         if settings.gemini_api_key is None:
             raise HTTPException(409, "請在專案 .env 設定 GEMINI_API_KEY 並重啟服務")
         try:
-            source = library.translation_source_version(video_id)
+            source = catalog.version_for(video_id, "translation_source")
             if source is None:
                 raise ValueError("Select source")
             job = translation.create(
@@ -527,7 +531,7 @@ def create_app(
     @app.post("/api/videos/{video_id}/exports/preview")
     def preview_export(video_id: str, body: ExportRequest) -> dict[str, object]:
         try:
-            source = library.translation_source_version(video_id)
+            source = catalog.version_for(video_id, "translation_source")
             return exporter.confirm(
                 video_id,
                 body.asset_id,

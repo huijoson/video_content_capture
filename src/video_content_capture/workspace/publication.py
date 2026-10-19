@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import BinaryIO
 
 from video_content_capture.workspace.jobs import checksum
-from video_content_capture.workspace.storage import Library
+from video_content_capture.workspace.storage import Library, Record
 
-RecordPublication = Callable[[sqlite3.Connection, tuple["PublishedArtifact", ...]], object]
+RecordPublication = Callable[[sqlite3.Connection, tuple["PublishedArtifact", ...]], Record | None]
 OwnerValidator = Callable[[sqlite3.Connection], bool]
 
 
@@ -67,7 +67,9 @@ class ArtifactPublisher:
                 )
                 published.append(PublishedArtifact(artifact.relative, path, digest))
             if record is not None:
-                record(connection, tuple(published))
+                result = record(connection, tuple(published))
+                if result is not None:
+                    self.library.record_job_result(connection, job_id, result)
             if complete:
                 released.extend(self.library.release_stages(connection, job_id))
 
