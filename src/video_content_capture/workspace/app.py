@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from video_content_capture import __version__
 from video_content_capture.workspace.asr import GeminiSubtitleAdapter
 from video_content_capture.workspace.config import ASRBackend, WorkspaceSettings, validate_binding
+from video_content_capture.workspace.downloads import DownloadService
 from video_content_capture.workspace.exports import ExportService, MediaExporter
 from video_content_capture.workspace.flows import (
     BUSY_MESSAGE,
@@ -158,21 +159,22 @@ def create_app(
         asr_adapter or ASR_ADAPTERS[settings.asr_backend](settings),
         scrub=lambda value: public_text(value, settings),
     )
+    downloads = DownloadService(library, downloader)
     exporter = ExportService(library, media_exporter)
     previews = PreviewService(library, preview_encoder)
     queue = JobLanes(
         library,
         MediaQueue(
             library,
-            downloader,
             handlers={
+                "download": downloads.run,
                 "translation": translation.run,
                 "subtitles": acquisition.run,
                 "export": exporter.run,
                 "preview": previews.run,
             },
         ),
-        MediaQueue(library, downloader, handlers={"qa": qa.run}, name="workspace-qa"),
+        MediaQueue(library, handlers={"qa": qa.run}, name="workspace-qa"),
     )
     flows = FlowService(library, settings, acquisition, translation, exporter)
     flows.bind(queue.enqueue)

@@ -123,7 +123,7 @@ def test_queue_dispatches_non_media_job_through_same_gate(tmp_path: Path) -> Non
         called.append((record["kind"], json.loads(record["snapshot"])))
         library.publish_attempt(str(record["id"]), attempt, lambda db: None)
 
-    queue = MediaQueue(library, adapter, handlers={"translation": run})
+    queue = MediaQueue(library, handlers={"translation": run})
     queue.process(str(job["id"]), Event())
     assert called == [("translation", {"language": "ja"})]
     assert library.get_job(str(job["id"]))["status"] == "completed"

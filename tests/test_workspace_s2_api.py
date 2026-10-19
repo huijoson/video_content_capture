@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from video_content_capture.workspace.app import create_app
 from video_content_capture.workspace.config import load_settings
+from video_content_capture.workspace.downloads import DownloadService
 from video_content_capture.workspace.jobs import MediaQueue
 from video_content_capture.workspace.storage import Library
 from video_content_capture.workspace.youtube import DownloadedMedia, SourceMetadata, parse_metadata
@@ -80,7 +81,8 @@ def setup_queue(tmp_path):
         source.model_dump_json(),
     )
     job = library.create_job(str(video["id"]), "v", "a")
-    return library, adapter, MediaQueue(library, adapter), job
+    queue = MediaQueue(library, handlers={"download": DownloadService(library, adapter).run})
+    return library, adapter, queue, job
 
 
 def test_media_publication_reuse_and_range(tmp_path: Path) -> None:
@@ -342,7 +344,8 @@ class StagingAdapter(FakeAdapter):
 def staging_queue(tmp_path: Path):
     library, _, _, job = setup_queue(tmp_path)
     adapter = StagingAdapter()
-    return library, adapter, MediaQueue(library, adapter), job
+    queue = MediaQueue(library, handlers={"download": DownloadService(library, adapter).run})
+    return library, adapter, queue, job
 
 
 def stage_files(library: Library, job: dict) -> list[Path]:
