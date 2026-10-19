@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+export PATH="${HOME}/.local/bin:${PATH}"
+cd "$ROOT"
+exec uv run python "${ROOT}/.cursor/skills/verify-vcc/scripts/control_vcc.py" "$@"
