@@ -1,5 +1,7 @@
 """Bounded plain-text subtitle parsing and multilingual source acquisition."""
 
+from __future__ import annotations
+
 import logging
 import math
 import re
@@ -22,6 +24,7 @@ from video_content_capture.workspace.youtube import (
 )
 
 if TYPE_CHECKING:
+    from video_content_capture.workspace.publication import ArtifactPublisher, PublishedArtifact
     from video_content_capture.workspace.storage import Library
 
 MAX_SUBTITLE_BYTES = 10 * 1024 * 1024
@@ -374,15 +377,19 @@ def acquire_subtitles(
 class AcquisitionService:
     def __init__(
         self,
-        library: "Library",
+        library: Library,
         adapter: YoutubeAdapter,
         asr: ASRAdapter,
         scrub: Callable[[str], str] = scrub_text,
+        publisher: ArtifactPublisher | None = None,
     ) -> None:
+        from video_content_capture.workspace.publication import ArtifactPublisher
+
         self.library = library
         self.adapter = adapter
         self.asr = asr
         self.scrub = scrub
+        self.publisher = publisher or ArtifactPublisher(library)
 
     def create(
         self,
@@ -418,10 +425,9 @@ class AcquisitionService:
         # Explicit imported sources are authoritative and never fall back to the platform.
         selected_id = video["translation_source_version_id"]
         if selected_id is not None and snapshot["language"] is None:
-            self.library.publish_attempt(
+            self.publisher.publish(
                 str(job["id"]),
                 attempt,
-                lambda connection: None,
                 owner_validator=lambda connection: not cancel.is_set(),
             )
             return
@@ -465,7 +471,10 @@ class AcquisitionService:
             validate_language(safe_language)
             cues = [cue.model_copy(update={"text": self.scrub(cue.text)}) for cue in parsed.cues]
 
-            def publish(connection: sqlite3.Connection) -> None:
+            def publish(
+                connection: sqlite3.Connection,
+                published: tuple[PublishedArtifact, ...],
+            ) -> None:
                 version = self.library.create_subtitle_version(
                     video_id,
                     safe_language,
@@ -480,10 +489,10 @@ class AcquisitionService:
                     (version["id"], version["id"], video_id),
                 )
 
-            self.library.publish_attempt(
+            self.publisher.publish(
                 str(job["id"]),
                 attempt,
-                publish,
+                record=publish,
                 owner_validator=lambda connection: not cancel.is_set(),
             )
         except SourceError as error:

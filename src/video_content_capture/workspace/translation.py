@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 from video_content_capture.redaction import scrub_text
 from video_content_capture.workspace.config import WorkspaceSettings
 from video_content_capture.workspace.jobs import StageStore
+from video_content_capture.workspace.publication import ArtifactPublisher
 from video_content_capture.workspace.security import public_text
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.subtitles import Cue
@@ -195,9 +196,11 @@ class TranslationService:
         library: Library,
         settings: WorkspaceSettings,
         adapter: TranslationAdapter | None = None,
+        publisher: ArtifactPublisher | None = None,
     ) -> None:
         self.library, self.settings = library, settings
         self.adapter = adapter or GeminiTranslationAdapter()
+        self.publisher = publisher or ArtifactPublisher(library)
 
     def create(
         self, video_id: str, source_version_id: str, language: str, *, regenerate: bool = False
@@ -315,10 +318,10 @@ class TranslationService:
                     self.library.update_attempt(
                         job_id, attempt, "translation", len(translated) / len(source)
                     )
-                self.library.publish_attempt(
+                self.publisher.publish(
                     job_id,
                     attempt,
-                    lambda db: self.library.complete_subtitle_version(
+                    record=lambda db, published: self.library.complete_subtitle_version(
                         db, str(snapshot["target_version_id"]), translated
                     ),
                 )

@@ -5,7 +5,6 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
-from typing import BinaryIO
 from uuid import uuid4
 
 from video_content_capture.workspace.jobs import (
@@ -14,6 +13,11 @@ from video_content_capture.workspace.jobs import (
     fingerprint,
     log_download_failure,
 )
+from video_content_capture.workspace.publication import (
+    Artifact,
+    ArtifactPublisher,
+    PublishedArtifact,
+)
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.youtube import SourceError, SourceMetadata, YoutubeAdapter
 
@@ -21,16 +25,21 @@ from video_content_capture.workspace.youtube import SourceError, SourceMetadata,
 class DownloadService:
     """The queue runs this behind the same handler contract as every other stage."""
 
-    def __init__(self, library: Library, adapter: YoutubeAdapter) -> None:
+    def __init__(
+        self,
+        library: Library,
+        adapter: YoutubeAdapter,
+        publisher: ArtifactPublisher | None = None,
+    ) -> None:
         self.library = library
         self.adapter = adapter
+        self.publisher = publisher or ArtifactPublisher(library)
 
     def run(self, job: Record, attempt: str, cancel: Event) -> None:
         job_id, video_id = str(job["id"]), str(job["video_id"])
         format_id, audio_id = str(job["format_id"]), str(job["audio_id"])
         identity = fingerprint(format_id, audio_id)
         current = ["download"]
-        released: list[Path] = []
         try:
             video = self.library.get_video(video_id)
             for asset in self.library.assets(video_id):
@@ -48,12 +57,7 @@ class DownloadService:
                 except (ValueError, OSError):
                     reusable = False
                 if reusable:
-                    if self.library.publish_attempt(
-                        job_id,
-                        attempt,
-                        lambda db: released.extend(self.library.release_stages(db, job_id)),
-                    ):
-                        self.library.remove_stage_files(released)
+                    self.publisher.publish(job_id, attempt)
                     return
             source = SourceMetadata.model_validate_json(str(video["metadata"]))
             fresh = self.adapter.query(source.source_url, cancel)
@@ -96,16 +100,10 @@ class DownloadService:
                     raise SourceError("invalid_media", "下載產物驗證失敗")
                 asset_id = uuid4().hex
                 relative = Path("videos") / video_id / "source" / f"{asset_id}.{media.container}"
-                digest = checksum(media.path)
-                published: list[Path] = []
 
-                def publish(db: sqlite3.Connection) -> None:
-                    def write(stream: BinaryIO) -> None:
-                        with media.path.open("rb") as source_file:
-                            shutil.copyfileobj(source_file, stream)
-
-                    target = self.library.publish(relative, write, lambda stream: None)
-                    published.append(target)
+                def record(
+                    db: sqlite3.Connection, published: tuple[PublishedArtifact, ...]
+                ) -> None:
                     db.execute(
                         "INSERT INTO media_assets VALUES(?,?,?,?,?,?,?,?,?)",
                         (
@@ -114,22 +112,19 @@ class DownloadService:
                             format_id,
                             audio_id,
                             str(relative),
-                            digest,
+                            published[0].checksum,
                             identity,
                             int(media.browser_playable),
                             media.container,
                         ),
                     )
-                    # Stages are kept for retries until the source is published.
-                    released.extend(self.library.release_stages(db, job_id))
 
-                try:
-                    if self.library.publish_attempt(job_id, attempt, publish):
-                        self.library.remove_stage_files(released)
-                except Exception:
-                    for target in published:
-                        target.unlink(missing_ok=True)
-                    raise
+                self.publisher.publish(
+                    job_id,
+                    attempt,
+                    [Artifact(relative, media.path)],
+                    record,
+                )
         except SourceError as error:
             log_download_failure(job_id, current[0], error.code, error)
             self.library.update_attempt(job_id, attempt, "failed", error=error.code)

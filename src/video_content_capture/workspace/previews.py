@@ -12,11 +12,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
-from typing import BinaryIO, Protocol
+from typing import Protocol
 from uuid import uuid4
 
 from video_content_capture.workspace.exports import ProcessRunner, verified_source
-from video_content_capture.workspace.jobs import checksum
+from video_content_capture.workspace.publication import (
+    Artifact,
+    ArtifactPublisher,
+    PublishedArtifact,
+)
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.youtube import SourceError, run_process
 
@@ -128,16 +132,21 @@ class PreviewEncoder:
 
 
 class PreviewService:
-    def __init__(self, library: Library, encoder: Encoder | None = None) -> None:
+    def __init__(
+        self,
+        library: Library,
+        encoder: Encoder | None = None,
+        publisher: ArtifactPublisher | None = None,
+    ) -> None:
         self.library = library
         self.encoder = encoder or PreviewEncoder()
+        self.publisher = publisher or ArtifactPublisher(library)
 
     def create(self, video_id: str, asset_id: str) -> Record:
         return self.library.create_preview_job(video_id, asset_id)
 
     def run(self, job: Record, attempt: str, cancel: Event) -> None:
         job_id, video_id = str(job["id"]), str(job["video_id"])
-        published: list[Path] = []
         try:
             asset_id = str(json.loads(str(job["snapshot"]))["asset_id"])
             asset, source = verified_source(self.library, video_id, asset_id)
@@ -157,7 +166,6 @@ class PreviewService:
                 self.library.update_attempt(job_id, attempt, "verifying")
                 preview_id = uuid4().hex
                 relative = Path("videos") / video_id / "previews" / f"{preview_id}.mp4"
-                digest = checksum(output)
                 height = min(MAX_PREVIEW_HEIGHT, self._height(asset))
 
                 def unique(connection: sqlite3.Connection) -> bool:
@@ -168,12 +176,9 @@ class PreviewService:
                         is None
                     )
 
-                def publish(connection: sqlite3.Connection) -> None:
-                    def write(stream: BinaryIO) -> None:
-                        with output.open("rb") as source_stream:
-                            shutil.copyfileobj(source_stream, stream)
-
-                    published.append(self.library.publish(relative, write, lambda stream: None))
+                def record(
+                    connection: sqlite3.Connection, published: tuple[PublishedArtifact, ...]
+                ) -> None:
                     connection.execute(
                         "INSERT INTO media_previews (id,video_id,asset_id,job_id,path,checksum,"
                         "height,created_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -183,20 +188,22 @@ class PreviewService:
                             asset_id,
                             job_id,
                             str(relative),
-                            digest,
+                            published[0].checksum,
                             height,
                             datetime.now(UTC).isoformat(),
                         ),
                     )
 
-                self.library.publish_attempt(job_id, attempt, publish, unique)
+                self.publisher.publish(
+                    job_id,
+                    attempt,
+                    [Artifact(relative, output)],
+                    record,
+                    owner_validator=unique,
+                )
         except SourceError as error:
-            for path in published:
-                path.unlink(missing_ok=True)
             self.library.update_attempt(job_id, attempt, "failed", error=error.code)
         except Exception:
-            for path in published:
-                path.unlink(missing_ok=True)
             self.library.update_attempt(job_id, attempt, "failed", error="preview_failed")
 
     def _height(self, asset: Record) -> int:

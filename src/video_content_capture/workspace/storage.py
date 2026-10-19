@@ -1596,6 +1596,16 @@ class Library:
                 pass
         return self.root / relative
 
+    def artifact_path(self, relative: Path) -> Path:
+        """Resolve a managed artifact for reading; reject escapes and symlinks."""
+        if not relative.name or relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("Artifact path must stay inside the library")
+        with self._directory(relative.parent):
+            path = self.root / relative
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("Artifact is missing")
+        return path
+
     def publish(
         self,
         relative: Path,

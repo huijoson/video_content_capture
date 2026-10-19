@@ -26,6 +26,7 @@ from video_content_capture.workspace.flows import (
 )
 from video_content_capture.workspace.jobs import JobLanes, MediaQueue
 from video_content_capture.workspace.previews import Encoder, PreviewService
+from video_content_capture.workspace.publication import ArtifactPublisher
 from video_content_capture.workspace.qa import QAAdapter
 from video_content_capture.workspace.qa_jobs import QAService
 from video_content_capture.workspace.quality import SubtitleForm, quality_options, resolve_source
@@ -149,19 +150,21 @@ def create_app(
     validate_binding(settings.host, settings.port)
     configure_redaction(settings)
     library = Library(settings.library_dir)
+    publisher = ArtifactPublisher(library)
 
     downloader = adapter or YtDlpAdapter()
-    translation = TranslationService(library, settings, translation_adapter)
+    translation = TranslationService(library, settings, translation_adapter, publisher)
     qa = QAService(library, settings, qa_adapter)
     acquisition = AcquisitionService(
         library,
         downloader,
         asr_adapter or ASR_ADAPTERS[settings.asr_backend](settings),
         scrub=lambda value: public_text(value, settings),
+        publisher=publisher,
     )
-    downloads = DownloadService(library, downloader)
-    exporter = ExportService(library, media_exporter)
-    previews = PreviewService(library, preview_encoder)
+    downloads = DownloadService(library, downloader, publisher)
+    exporter = ExportService(library, media_exporter, publisher)
+    previews = PreviewService(library, preview_encoder, publisher)
     queue = JobLanes(
         library,
         MediaQueue(
@@ -566,10 +569,7 @@ def create_app(
         try:
             artifact = library.get_export(export_id)
             relative = Path(str(artifact["path"]))
-            with library._directory(relative.parent):
-                path = library.root / relative
-                if path.is_symlink() or not path.is_file():
-                    raise ValueError("Missing export")
+            path = publisher.servable_path(relative)
             return FileResponse(
                 path,
                 filename=path.name,
@@ -606,10 +606,7 @@ def create_app(
         try:
             preview = library.get_preview(preview_id)
             relative = Path(str(preview["path"]))
-            with library._directory(relative.parent):
-                path = library.root / relative
-                if path.is_symlink() or not path.is_file():
-                    raise ValueError("Missing preview")
+            path = publisher.servable_path(relative)
             return FileResponse(path, media_type="video/mp4")
         except (ValueError, OSError):
             raise HTTPException(404, "預覽不存在") from None
@@ -761,10 +758,7 @@ def create_app(
         try:
             asset = library.get_asset(asset_id)
             relative = Path(str(asset["path"]))
-            with library._directory(relative.parent):
-                path = library.root / relative
-                if path.is_symlink() or not path.is_file():
-                    raise ValueError("Missing media")
+            path = publisher.servable_path(relative)
             return FileResponse(
                 path, media_type="video/mp4" if asset["container"] == "mp4" else "video/x-matroska"
             )

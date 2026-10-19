@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread
-from typing import Annotated, BinaryIO, Literal, Self
+from typing import Annotated, Literal, Self
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -25,6 +25,11 @@ from video_content_capture.workspace.burned import (
     target_bitrate,
 )
 from video_content_capture.workspace.jobs import checksum
+from video_content_capture.workspace.publication import (
+    Artifact,
+    ArtifactPublisher,
+    PublishedArtifact,
+)
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.subtitles import Cue
 from video_content_capture.workspace.youtube import SourceError, run_process
@@ -549,9 +554,15 @@ class ExportService:
     # long-lived local service does not accumulate every export the user ever previewed.
     MAX_CONFIRMATIONS = 256
 
-    def __init__(self, library: Library, exporter: MediaExporter | None = None) -> None:
+    def __init__(
+        self,
+        library: Library,
+        exporter: MediaExporter | None = None,
+        publisher: ArtifactPublisher | None = None,
+    ) -> None:
         self.library = library
         self.exporter = exporter or MediaExporter()
+        self.publisher = publisher or ArtifactPublisher(library)
         self._confirmed: OrderedDict[str, None] = OrderedDict()
         self._confirmation_lock = Lock()
 
@@ -750,7 +761,6 @@ class ExportService:
 
     def run(self, job: Record, attempt: str, cancel: Event) -> None:
         job_id, video_id = str(job["id"]), str(job["video_id"])
-        published: list[Path] = []
         try:
             snapshot = ExportSnapshot.model_validate_json(str(job["snapshot"]))
             _, source = self._source(video_id, snapshot.asset_id)
@@ -818,16 +828,10 @@ class ExportService:
                     snapshot.container,
                 )
                 relative = Path("videos") / video_id / "exports" / filename
-                with self.library._directory(relative.parent, create=True):
-                    pass
-                digest = checksum(output)
 
-                def publish(db: sqlite3.Connection) -> None:
-                    def write(stream: BinaryIO) -> None:
-                        with output.open("rb") as source_stream:
-                            shutil.copyfileobj(source_stream, stream)
-
-                    published.append(self.library.publish(relative, write, lambda stream: None))
+                def record(
+                    db: sqlite3.Connection, published: tuple[PublishedArtifact, ...]
+                ) -> None:
                     db.execute(
                         "INSERT INTO export_artifacts "
                         "(id,video_id,job_id,path,container,summary,checksum,subtitle_form) "
@@ -839,15 +843,18 @@ class ExportService:
                             str(relative),
                             snapshot.container,
                             snapshot.model_dump_json(),
-                            digest,
+                            published[0].checksum,
                             snapshot.subtitle_form,
                         ),
                     )
 
-                self.library.publish_attempt(job_id, attempt, publish)
+                self.publisher.publish(
+                    job_id,
+                    attempt,
+                    [Artifact(relative, output)],
+                    record,
+                )
         except SourceError as error:
             self.library.update_attempt(job_id, attempt, "failed", error=error.code)
         except Exception:
-            for path in published:
-                path.unlink(missing_ok=True)
             self.library.update_attempt(job_id, attempt, "failed", error="export_failed")
