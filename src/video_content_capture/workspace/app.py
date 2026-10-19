@@ -182,7 +182,7 @@ def create_app(
     flows = FlowService(library, settings, acquisition, translation, exporter)
     flows.bind(queue.enqueue)
     flows.bind_cancel(queue.cancel)
-    queue.bind(flows.on_job_finished)
+    queue.bind_completion(flows.on_job_finished)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

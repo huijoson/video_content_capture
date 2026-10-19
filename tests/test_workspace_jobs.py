@@ -211,7 +211,7 @@ def test_cancelling_a_queued_job_still_fires_the_completion_hook(tmp_path: Path)
     """
     library, _, queue, job = setup_queue(tmp_path)
     finished: list[str] = []
-    queue.on_finished = finished.append
+    queue.on_job_finished = finished.append
 
     queue.enqueue(job)
     assert queue.pending == [str(job["id"])]
@@ -226,7 +226,7 @@ def test_cancelling_a_running_job_reports_finish_once(tmp_path: Path) -> None:
     """The worker owns a job it already took from `pending`; `cancel` must not double-report."""
     library, _, queue, job = setup_queue(tmp_path)
     finished: list[str] = []
-    queue.on_finished = finished.append
+    queue.on_job_finished = finished.append
 
     queue.enqueue(job)
     taken = queue.pending.pop(0)  # The worker hands the job to `_worker` before `cancel` sees it.
@@ -244,7 +244,7 @@ def test_cleanup_signal_does_not_report_a_finish(tmp_path: Path) -> None:
     """
     library, _, queue, job = setup_queue(tmp_path)
     finished: list[str] = []
-    queue.on_finished = finished.append
+    queue.on_job_finished = finished.append
 
     queue.enqueue(job)
     library.cancel_job(str(job["id"]))
@@ -270,7 +270,7 @@ def test_completion_hook_failure_never_stops_the_lane(tmp_path: Path) -> None:
         calls.append(job_id)
         raise RuntimeError("chaining exploded")
 
-    queue.on_finished = broken
+    queue.on_job_finished = broken
     second = library.create_job(str(other["id"]), "v", "a")
     assert second["id"] != job["id"]
     queue.enqueue(job)

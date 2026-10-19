@@ -245,7 +245,7 @@ def test_migration_adds_flow_tracking_to_existing_database(tmp_path: Path) -> No
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert "flow_id" in {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
         assert connection.execute("SELECT count(*) FROM flows").fetchone()[0] == 0
-    flow = upgraded.create_flow(video_id, "download", {"height": 720})
+    flow = upgraded._create_flow(video_id, "download", {"height": 720})
     assert flow["status"] == "running" and flow["stage"] == "download"
     assert upgraded.get_flow(str(flow["id"]))["snapshot"] == '{"height": 720}'
 
@@ -254,21 +254,21 @@ def test_flow_lifecycle_is_frozen_singular_and_interrupted_on_restart(tmp_path: 
     library = Library(tmp_path / "library")
     library.initialize()
     video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
-    flow = library.create_flow(video_id, "download", {"height": 1080, "target_language": "zh-TW"})
+    flow = library._create_flow(video_id, "download", {"height": 1080, "target_language": "zh-TW"})
     with pytest.raises(ValueError):
-        library.create_flow(video_id, "download", {"height": 720})
+        library._create_flow(video_id, "download", {"height": 720})
     assert [row["id"] for row in library.flows(video_id)] == [flow["id"]]
     assert str(library.active_flow(video_id)["id"]) == flow["id"]  # type: ignore[index]
     assert library.flow_jobs(str(flow["id"])) == []
     job = library.create_job(video_id, "v", "a", str(flow["id"]))
     assert [row["id"] for row in library.flow_jobs(str(flow["id"]))] == [job["id"]]
-    advanced = library.update_flow(str(flow["id"]), stage="export")
+    advanced = library._update_flow(str(flow["id"]), stage="export")
     assert advanced["stage"] == "export" and advanced["status"] == "running"
-    failed = library.update_flow(str(flow["id"]), status="failed", error="media_failed")
+    failed = library._update_flow(str(flow["id"]), status="failed", error="media_failed")
     assert failed["status"] == "failed" and failed["error_code"] == "media_failed"
     assert library.active_flow(video_id) is None
     # A finished flow never blocks a new one, and restart interrupts only running flows.
-    second = library.create_flow(video_id, "subtitles", {"language": None})
+    second = library._create_flow(video_id, "subtitles", {"language": None})
     library.interrupt_running()
     assert library.get_flow(str(second["id"]))["status"] == "interrupted"
     library.mark_deleting(video_id)
@@ -281,43 +281,43 @@ def test_reopen_flow_revives_only_ended_flows_and_keeps_one_running(tmp_path: Pa
     library = Library(tmp_path / "library")
     library.initialize()
     video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
-    flow = library.create_flow(video_id, "subtitles", {"target_language": "en"})
+    flow = library._create_flow(video_id, "subtitles", {"target_language": "en"})
     flow_id = str(flow["id"])
 
     # Running is idempotent: the coordinator may re-enter retry on a live flow.
-    assert str(library.reopen_flow(flow_id)["id"]) == flow_id
-    assert str(library.reopen_flow(flow_id)["status"]) == "running"
+    assert str(library._reopen_flow(flow_id)["id"]) == flow_id
+    assert str(library._reopen_flow(flow_id)["status"]) == "running"
 
-    library.update_flow(flow_id, status="failed", error="media_failed")
-    revived = library.reopen_flow(flow_id)
+    library._update_flow(flow_id, status="failed", error="media_failed")
+    revived = library._reopen_flow(flow_id)
     assert revived["status"] == "running"
     assert revived["error_code"] is None
     assert str(library.active_flow(video_id)["id"]) == flow_id  # type: ignore[index]
 
-    library.update_flow(flow_id, status="cancelled", error="cancelled")
-    assert str(library.reopen_flow(flow_id)["status"]) == "running"
+    library._update_flow(flow_id, status="cancelled", error="cancelled")
+    assert str(library._reopen_flow(flow_id)["status"]) == "running"
     library.interrupt_running()
-    assert str(library.reopen_flow(flow_id)["status"]) == "running"
+    assert str(library._reopen_flow(flow_id)["status"]) == "running"
 
     # A completed flow is finished for good; retrying it would re-publish an artifact.
-    library.update_flow(flow_id, status="completed")
+    library._update_flow(flow_id, status="completed")
     with pytest.raises(ValueError, match="finished"):
-        library.reopen_flow(flow_id)
+        library._reopen_flow(flow_id)
 
     with pytest.raises(ValueError):
-        library.reopen_flow("0123456789abcdef")
+        library._reopen_flow("0123456789abcdef")
 
 
 def test_reopen_flow_refuses_while_another_flow_is_running(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
     video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
-    ended = library.create_flow(video_id, "download", {"target_language": "en"})
-    library.update_flow(str(ended["id"]), status="failed", error="media_failed")
-    running = library.create_flow(video_id, "download", {"target_language": "en"})
+    ended = library._create_flow(video_id, "download", {"target_language": "en"})
+    library._update_flow(str(ended["id"]), status="failed", error="media_failed")
+    running = library._create_flow(video_id, "download", {"target_language": "en"})
 
     with pytest.raises(ValueError, match="already in progress"):
-        library.reopen_flow(str(ended["id"]))
+        library._reopen_flow(str(ended["id"]))
     assert library.get_flow(str(ended["id"]))["status"] == "failed"
     assert str(library.active_flow(video_id)["id"]) == running["id"]  # type: ignore[index]
 
@@ -328,12 +328,12 @@ def test_latest_flow_returns_the_newest_flow_in_any_status(tmp_path: Path) -> No
     video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
     assert library.latest_flow(video_id) is None
 
-    first = library.create_flow(video_id, "download", {"target_language": "en"})
-    library.update_flow(str(first["id"]), status="failed", error="media_failed")
-    second = library.create_flow(video_id, "download", {"target_language": "en"})
+    first = library._create_flow(video_id, "download", {"target_language": "en"})
+    library._update_flow(str(first["id"]), status="failed", error="media_failed")
+    second = library._create_flow(video_id, "download", {"target_language": "en"})
     assert str(library.latest_flow(video_id)["id"]) == second["id"]  # type: ignore[index]
 
-    library.update_flow(str(second["id"]), status="cancelled")
+    library._update_flow(str(second["id"]), status="cancelled")
     latest = library.latest_flow(video_id)
     # A finished flow still leads, which is what the reloaded page needs to label it.
     assert latest is not None and latest["status"] == "cancelled"

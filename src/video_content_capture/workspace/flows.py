@@ -157,6 +157,16 @@ class FlowService:
         """Cancelling a stage must terminate its child process, which only the queue can do."""
         self.cancel_job = cancel
 
+    def _end(self, flow_id: str, status: str, error: str | None = None) -> Record:
+        """The only way this coordinator ends a flow; storage stays a passive row store."""
+        return self.library._update_flow(flow_id, status=status, error=error)
+
+    def _move_stage(self, flow_id: str, stage: str) -> Record:
+        return self.library._update_flow(flow_id, stage=stage)
+
+    def _attach(self, flow_id: str, job: Record) -> None:
+        self.library._set_job_flow(str(job["id"]), flow_id)
+
     def _video(self, video_id: str) -> Record:
         return self.library.get_video(video_id)
 
@@ -292,7 +302,7 @@ class FlowService:
         if self.library.active_flow(video_id) is not None:
             raise FlowConflictError(BUSY_MESSAGE)
         try:
-            flow = self.library.create_flow(video_id, "download", snapshot.model_dump())
+            flow = self.library._create_flow(video_id, "download", snapshot.model_dump())
         except ValueError as error:
             raise FlowConflictError(BUSY_MESSAGE) from error
         job = self.library.create_job(
@@ -309,7 +319,11 @@ class FlowService:
             return
         if job["flow_id"] is None:
             return
-        self.advance(str(job["flow_id"]), job)
+        flow_id = str(job["flow_id"])
+        try:
+            self.advance(flow_id, job)
+        except Exception:
+            self._end(flow_id, "failed", "flow_failed")
 
     def _stage_job(self, flow_id: str, stage: str) -> Record | None:
         """The job that carries the flow's current stage, if it was ever created."""
@@ -343,9 +357,9 @@ class FlowService:
         # The worker turns a cancelled stage into a cancelled flow, but it does so on its own
         # thread. Ending the flow here as well makes the answer deterministic and keeps a dead
         # worker from leaving a `running` flow that blocks every later start. When the worker
-        # gets there first this is a no-op: `update_flow` only writes `running` rows.
+        # gets there first this is a no-op: `_update_flow` only writes `running` rows.
         if self.library.get_flow(flow_id)["status"] == "running":
-            self.library.update_flow(flow_id, status="cancelled", error="cancelled")
+            self._end(flow_id, "cancelled", "cancelled")
         return self.status(flow_id)
 
     def retry(self, flow_id: str) -> Record:
@@ -365,7 +379,7 @@ class FlowService:
         if str(job["error_code"]) == "container_confirmation_required":
             raise FlowError(FLOW_MKV_MESSAGE)
         # Reopen first: a fast worker must not finish the job before the flow accepts it.
-        self.library.reopen_flow(flow_id)
+        self.library._reopen_flow(flow_id)
         if str(job["status"]) == "completed":
             # The stage succeeded and chaining failed; redo the chaining, not the stage.
             return self.status(str(self.advance(flow_id, job)["id"]))
@@ -381,24 +395,22 @@ class FlowService:
         status = str(job["status"])
         if status == "cancelled":
             # The user cancelled this stage from the job list; that ends the whole flow.
-            return self.library.update_flow(flow_id, status="cancelled", error="cancelled")
+            return self._end(flow_id, "cancelled", "cancelled")
         if status != "completed":
-            return self.library.update_flow(
-                flow_id, status="failed", error=str(job["error_code"] or status)
-            )
+            return self._end(flow_id, "failed", str(job["error_code"] or status))
         try:
             return self._next_stage(flow, job)
         except Exception as error:
             # A flow left running here blocks every later start and retry of this video.
             code = error.code if isinstance(error, SourceError) else "flow_failed"
-            return self.library.update_flow(flow_id, status="failed", error=code)
+            return self._end(flow_id, "failed", code)
 
     def _next_stage(self, flow: Record, job: Record) -> Record:
         flow_id, video_id = str(flow["id"]), str(flow["video_id"])
         snapshot = FlowSnapshot.model_validate_json(str(flow["snapshot"]))
         kind = str(job["kind"])
         if kind == "export":
-            return self.library.update_flow(flow_id, status="completed")
+            return self._end(flow_id, "completed")
         if kind == "translation":
             translated = json.loads(str(job["snapshot"]))
             return self._chain(
@@ -443,8 +455,8 @@ class FlowService:
         )
 
     def _chain_translation(self, flow_id: str, translation: Record) -> Record:
-        self.library.set_job_flow(str(translation["id"]), flow_id)
-        self.library.update_flow(flow_id, stage="translation")
+        self._attach(flow_id, translation)
+        self._move_stage(flow_id, "translation")
         self.enqueue(translation)
         return self.library.get_flow(flow_id)
 
@@ -470,8 +482,8 @@ class FlowService:
         raise FlowError("找不到這條流程取得的原文字幕版本")
 
     def _chain(self, flow_id: str, stage: str, job: Record) -> Record:
-        self.library.set_job_flow(str(job["id"]), flow_id)
-        self.library.update_flow(flow_id, stage=stage)
+        self._attach(flow_id, job)
+        self._move_stage(flow_id, stage)
         self.enqueue(job)
         return self.library.get_flow(flow_id)
 

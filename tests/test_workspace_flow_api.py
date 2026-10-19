@@ -501,10 +501,10 @@ def test_flow_reclaims_a_queued_download_left_unlinked_by_a_crash(tmp_path: Path
         video = client.post(
             "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
         ).json()
-        crashed = library.create_flow(
+        crashed = library._create_flow(
             video["id"], "download", {"height": 720, "target_language": "en"}
         )
-        library.update_flow(str(crashed["id"]), status="interrupted")
+        library._update_flow(str(crashed["id"]), status="interrupted")
         orphan = library.create_job(video["id"], "v", "a")
         assert orphan["flow_id"] is None and orphan["status"] == "queued"
 

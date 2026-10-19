@@ -105,7 +105,7 @@ class MediaQueue:
         self.pending: list[str] = []
         self.active: dict[str, threading.Event] = {}
         self.stopping = False
-        self.on_finished: Callable[[str], None] | None = None
+        self.on_job_finished: Callable[[str], None] | None = None
         self.thread = threading.Thread(target=self._worker, name=name, daemon=True)
 
     def start(self) -> None:
@@ -139,7 +139,7 @@ class MediaQueue:
         # hook in `_worker` would never run for it. Flow chaining depends on that hook to
         # end the flow when a stage does not complete, so fire it here instead.
         if queued:
-            self._finished(job_id)
+            self._notify_finished(job_id)
 
     def signal(self, job_id: str) -> None:
         """Stop a job whose DB status was already changed by a cleanup transaction."""
@@ -168,17 +168,17 @@ class MediaQueue:
             try:
                 self.process(job_id, event)
             finally:
-                self._finished(job_id)
+                self._notify_finished(job_id)
                 with self.condition:
                     self.active.pop(job_id, None)
                     self.condition.notify_all()
 
-    def _finished(self, job_id: str) -> None:
+    def _notify_finished(self, job_id: str) -> None:
         # The completion hook chains the next flow stage; it must never stop the lane.
-        if self.on_finished is None:
+        if self.on_job_finished is None:
             return
         try:
-            self.on_finished(job_id)
+            self.on_job_finished(job_id)
         except Exception:
             logger.exception("Job completion hook failed job=%s", job_id)
 
@@ -218,9 +218,9 @@ class JobLanes:
     def enqueue(self, job: Record) -> None:
         self._lane(job).enqueue(job)
 
-    def bind(self, on_finished: Callable[[str], None]) -> None:
-        """Flow chaining runs on the media lane's completion hook, outside the serial worker."""
-        self.media.on_finished = on_finished
+    def bind_completion(self, on_job_finished: Callable[[str], None]) -> None:
+        """Report finished or cancelled jobs outside the serial worker."""
+        self.media.on_job_finished = on_job_finished
 
     def cancel(self, job_id: str) -> None:
         self._lane(self.library.get_job(job_id)).cancel(job_id)

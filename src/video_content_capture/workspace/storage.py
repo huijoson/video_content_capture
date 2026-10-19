@@ -1396,7 +1396,7 @@ class Library:
             ):
                 connection.execute(statement, (video_id,))
 
-    def create_flow(self, video_id: str, stage: str, snapshot: Record) -> Record:
+    def _create_flow(self, video_id: str, stage: str, snapshot: Record) -> Record:
         """Freeze the confirm-screen choices so later UI edits cannot affect this flow."""
         if stage not in FLOW_STAGES:
             raise ValueError("Invalid flow stage")
@@ -1468,10 +1468,10 @@ class Library:
                 return None
             return dict(zip((column[0] for column in cursor.description), row, strict=True))
 
-    def reopen_flow(self, flow_id: str) -> Record:
+    def _reopen_flow(self, flow_id: str) -> Record:
         """Revive an ended flow so `advance` can chain its next stage again.
 
-        `update_flow` only ever writes `status='running'` rows, so a failed, cancelled or
+        `_update_flow` only ever writes `status='running'` rows, so a failed, cancelled or
         interrupted flow needs this explicit transition. A completed flow is finished for
         good: retrying it would re-publish an artifact the user already has.
         """
@@ -1486,7 +1486,7 @@ class Library:
                 "SELECT 1 FROM flows WHERE video_id = ? AND status = 'running' AND id != ?",
                 (flow["video_id"], flow_id),
             ).fetchone():
-                # Same wording as `create_flow`: the UI treats both as one busy flow.
+                # Same wording as `_create_flow`: the UI treats both as one busy flow.
                 raise ValueError("Flow already in progress")
             connection.execute(
                 "UPDATE flows SET status = 'running', error_code = NULL, updated_at = ? "
@@ -1506,7 +1506,7 @@ class Library:
                 )
             )
 
-    def set_job_flow(self, job_id: str, flow_id: str) -> None:
+    def _set_job_flow(self, job_id: str, flow_id: str) -> None:
         """Attach a chained job to its flow so progress and cleanup stay grouped."""
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -1519,7 +1519,7 @@ class Library:
             ):
                 raise ValueError("Job not found")
 
-    def update_flow(
+    def _update_flow(
         self,
         flow_id: str,
         *,
