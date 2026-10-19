@@ -6,6 +6,7 @@ coordinator only decides which existing job kind comes next and owns the flow re
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,6 +15,7 @@ from video_content_capture.workspace.config import WorkspaceSettings
 from video_content_capture.workspace.exports import ExportService, ExportSnapshot, SnapshotTrack
 from video_content_capture.workspace.jobs import fingerprint
 from video_content_capture.workspace.quality import (
+    ResolvedSource,
     SubtitleForm,
     available_resolutions,
     default_audio,
@@ -91,6 +93,31 @@ class FlowSnapshot(FlowChoice):
     # Only set when a complete original already existed at start; a version the flow
     # acquires itself is identified through that acquisition job instead.
     source_version_id: str | None = Field(default=None, max_length=32)
+
+
+@dataclass(frozen=True)
+class FlowPlan:
+    """One computation of what the confirm screen promises and what start will freeze."""
+
+    video_id: str
+    title: str
+    duration: object
+    source: SourceMetadata
+    height: int
+    default_height: int
+    target_language: str | None
+    original_source: str
+    translate: bool | None
+    blocking_reason: str | None
+    gemini_configured: bool
+    audio: dict[str, object]
+    burned: ResolvedSource
+    tracks: ResolvedSource
+    bilingual_burned: bool
+    source_version_id: str | None
+
+    def resolved(self, subtitle_form: SubtitleForm) -> ResolvedSource:
+        return self.burned if subtitle_form == "burned" else self.tracks
 
 
 def flow_steps(translate: bool) -> list[str]:
@@ -200,10 +227,10 @@ class FlowService:
             return None
         return str(version["id"])
 
-    def confirm(
+    def plan(
         self, video_id: str, height: int | None = None, target_language: str | None = None
-    ) -> Record:
-        """Read-only confirm screen: what the flow will do before the user presses 開始處理."""
+    ) -> FlowPlan:
+        """Resolve the source, language, translation and capability facts exactly once."""
         video = self._video(video_id)
         source = self._source(video)
         chosen = default_resolution(source) if height is None else height
@@ -220,33 +247,57 @@ class FlowService:
             if missing
             else None
         )
-        burned = resolve_source(source, chosen, "burned")
-        tracks = resolve_source(source, chosen, "tracks")
+        return FlowPlan(
+            video_id=video_id,
+            title=str(video["title"]),
+            duration=video["duration"],
+            source=source,
+            height=chosen,
+            default_height=default_resolution(source),
+            target_language=target,
+            original_source=original,
+            translate=translate,
+            blocking_reason=blocking,
+            gemini_configured=bool(self.settings.gemini_api_key),
+            audio=default_audio(source).model_dump(mode="json"),
+            burned=resolve_source(source, chosen, "burned"),
+            tracks=resolve_source(source, chosen, "tracks"),
+            bilingual_burned=BILINGUAL_BURNED,
+            source_version_id=self._frozen_source_version(video),
+        )
+
+    def confirm(
+        self, video_id: str, height: int | None = None, target_language: str | None = None
+    ) -> Record:
+        """Read-only confirm screen: what the flow will do before the user presses 開始處理."""
+        plan = self.plan(video_id, height, target_language)
         return {
-            "video_id": video_id,
-            "title": str(video["title"]),
-            "duration": video["duration"],
-            "resolution": chosen,
-            "default_resolution": default_resolution(source),
-            "resolutions": available_resolutions(source),
-            "audio": default_audio(source).model_dump(mode="json"),
-            "original_language": source.original_language,
-            "original_source": original,
-            "original_source_label": ORIGINAL_SOURCE_LABELS.get(original, original),
+            "video_id": plan.video_id,
+            "title": plan.title,
+            "duration": plan.duration,
+            "resolution": plan.height,
+            "default_resolution": plan.default_height,
+            "resolutions": available_resolutions(plan.source),
+            "audio": plan.audio,
+            "original_language": plan.source.original_language,
+            "original_source": plan.original_source,
+            "original_source_label": ORIGINAL_SOURCE_LABELS.get(
+                plan.original_source, plan.original_source
+            ),
             # The default form is burned (ADR 0004), so MP4 is the headline output format.
             "subtitle_form": "burned",
             "subtitle_forms": {
-                "burned": burned.output_container,
-                "tracks": tracks.output_container,
+                "burned": plan.burned.output_container,
+                "tracks": plan.tracks.output_container,
             },
-            "output_format": burned.output_container,
-            "steps": flow_steps(True if translate is None else translate),
-            "needs_translation": translate,
+            "output_format": plan.burned.output_container,
+            "steps": flow_steps(True if plan.translate is None else plan.translate),
+            "needs_translation": plan.translate,
             # 「原文＋目標」 only means something when a translation actually happens.
-            "bilingual_allowed": translate is not False,
-            "bilingual_burned": BILINGUAL_BURNED,
-            "gemini_configured": bool(self.settings.gemini_api_key),
-            "blocked_reason": blocking,
+            "bilingual_allowed": plan.translate is not False,
+            "bilingual_burned": plan.bilingual_burned,
+            "gemini_configured": plan.gemini_configured,
+            "blocked_reason": plan.blocking_reason,
             "busy": self.library.active_flow(video_id) is not None,
             "latest_flow_id": (
                 str(latest["id"]) if (latest := self.library.latest_flow(video_id)) else None
@@ -277,27 +328,30 @@ class FlowService:
 
     def start(self, video_id: str, choice: FlowChoice) -> tuple[Record, Record]:
         """Freeze the choices, then create the download job the rest of the flow chains from."""
-        video = self._video(video_id)
-        source = self._source(video)
-        target = self._target_language(choice.target_language)
-        self._resolution(source, choice.height)
-        if self._expected_original(video, source) == "platform_choice":
+        plan = self.plan(video_id, choice.height, choice.target_language)
+        if plan.original_source == "platform_choice":
             raise FlowError(SOURCE_CHOICE_MESSAGE)
-        translate = self._needs_translation(source, target)
+        if plan.translate is None:
+            raise FlowError(TARGET_MESSAGE)
+        translate = plan.translate
         if choice.include_original and not translate:
             raise FlowError("目標語系與原文相同，雙語字幕無法啟用，請改用單一語系")
-        if translate and not self.settings.gemini_api_key:
+        if translate and not plan.gemini_configured:
             raise FlowKeyError(MISSING_KEY_MESSAGE)
-        if choice.subtitle_form == "burned" and choice.include_original and not BILINGUAL_BURNED:
+        if (
+            choice.subtitle_form == "burned"
+            and choice.include_original
+            and not plan.bilingual_burned
+        ):
             raise FlowError("燒錄字幕目前僅支援單一語系，雙語請改用可選字幕軌或取消「原文＋目標」")
-        resolved = resolve_source(source, choice.height, choice.subtitle_form)
+        resolved = plan.resolved(choice.subtitle_form)
         snapshot = FlowSnapshot(
             **choice.model_dump(),
             format_id=resolved.format_id,
             audio_id=resolved.audio_id,
             container=resolved.container,
             translate=translate,
-            source_version_id=self._frozen_source_version(video),
+            source_version_id=plan.source_version_id,
         )
         if self.library.active_flow(video_id) is not None:
             raise FlowConflictError(BUSY_MESSAGE)
