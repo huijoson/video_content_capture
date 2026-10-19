@@ -137,9 +137,11 @@ def setup_service(tmp_path: Path):
     class FakeExporter(MediaExporter):
         def __init__(self):
             self.tracks = []
+            self.preview_calls = 0
             self.on_mux = lambda: None
 
         def preview(self, source, tracks, directory, cancel):
+            self.preview_calls += 1
             return "mp4"
 
         def mux(self, source, tracks, container, directory, cancel, *, preview=False):
@@ -155,7 +157,7 @@ def setup_service(tmp_path: Path):
 
 def test_queued_export_reads_snapshot_and_publishes_unique_artifact(tmp_path: Path) -> None:
     library, video_id, original, target, exporter, service = setup_service(tmp_path)
-    snapshot = service.preview(
+    snapshot = service.confirm(
         video_id, "asset", [str(target["id"])], True, str(original["id"]), str(original["id"])
     )
     job = service.create(video_id, snapshot)
@@ -173,9 +175,28 @@ def test_queued_export_reads_snapshot_and_publishes_unique_artifact(tmp_path: Pa
     assert len({a["path"] for a in library.exports(video_id)}) == 2
 
 
+def test_create_reuses_confirmation_without_media_work(tmp_path: Path) -> None:
+    library, video_id, _, target, exporter, service = setup_service(tmp_path)
+    snapshot = service.confirm(video_id, "asset", [str(target["id"])])
+    assert exporter.preview_calls == 1
+    service.create(video_id, snapshot)
+    assert exporter.preview_calls == 1
+
+
+def test_create_rejects_snapshot_that_was_never_confirmed(tmp_path: Path) -> None:
+    from video_content_capture.workspace.exports import ExportService
+
+    library, video_id, _, target, exporter, service = setup_service(tmp_path)
+    snapshot = service.confirm(video_id, "asset", [str(target["id"])])
+    other = ExportService(library, exporter)
+    with pytest.raises(ValueError, match="摘要已變更"):
+        other.create(video_id, snapshot)
+    assert library.list_jobs() == []
+
+
 def test_cancel_retry_late_export_cannot_publish(tmp_path: Path) -> None:
     library, video_id, _, target, exporter, service = setup_service(tmp_path)
-    snapshot = service.preview(video_id, "asset", [str(target["id"])])
+    snapshot = service.confirm(video_id, "asset", [str(target["id"])])
     job = service.create(video_id, snapshot)
     job_id = str(job["id"])
     attempt = library.start_job(job_id)
@@ -229,8 +250,8 @@ def test_mp4_failure_selects_mkv_and_keeps_language_region(tmp_path: Path) -> No
 
 def test_export_preview_reconfirms_mkv_in_new_snapshot(tmp_path: Path) -> None:
     library, video_id, _, target, exporter, service = setup_service(tmp_path)
-    first = service.preview(video_id, "asset", [str(target["id"])])
-    confirmed = service.preview(video_id, "asset", [str(target["id"])], container="mkv")
+    first = service.confirm(video_id, "asset", [str(target["id"])])
+    confirmed = service.confirm(video_id, "asset", [str(target["id"])], container="mkv")
     assert first["container"] == "mp4"
     assert confirmed["container"] == "mkv"
     job = service.create(video_id, confirmed)
@@ -239,7 +260,7 @@ def test_export_preview_reconfirms_mkv_in_new_snapshot(tmp_path: Path) -> None:
 
 def test_export_snapshot_tampering_is_rejected(tmp_path: Path) -> None:
     library, video_id, _, target, exporter, service = setup_service(tmp_path)
-    snapshot = service.preview(video_id, "asset", [str(target["id"])])
+    snapshot = service.confirm(video_id, "asset", [str(target["id"])])
     snapshot["target_languages"] = ["ja"]
     with pytest.raises(ValueError, match="摘要已變更"):
         service.create(video_id, snapshot)
@@ -250,7 +271,7 @@ def test_runtime_failure_preserves_source_subtitles_and_requires_confirmation(
     tmp_path: Path,
 ) -> None:
     library, video_id, _, target, exporter, service = setup_service(tmp_path)
-    snapshot = service.preview(video_id, "asset", [str(target["id"])])
+    snapshot = service.confirm(video_id, "asset", [str(target["id"])])
     job = service.create(video_id, snapshot)
     calls = []
 
@@ -291,7 +312,7 @@ def test_export_space_preflight_blocks_mux_and_preserves_inputs(
     from video_content_capture.workspace import exports
 
     library, video_id, _, target, exporter, service = setup_service(tmp_path)
-    snapshot = service.preview(video_id, "asset", [str(target["id"])])
+    snapshot = service.confirm(video_id, "asset", [str(target["id"])])
     job = service.create(video_id, snapshot)
     calls = []
     exporter.on_mux = lambda: calls.append("mux")
@@ -309,5 +330,5 @@ def test_export_space_preflight_blocks_mux_and_preserves_inputs(
 def test_export_requires_exactly_one_target_version(tmp_path: Path, count: int) -> None:
     library, video_id, _, target, exporter, service = setup_service(tmp_path)
     with pytest.raises(ValueError, match="一份"):
-        service.preview(video_id, "asset", [str(target["id"])] * count)
+        service.confirm(video_id, "asset", [str(target["id"])] * count)
     assert library.list_jobs() == []

@@ -523,7 +523,7 @@ def create_app(
     def preview_export(video_id: str, body: ExportRequest) -> dict[str, object]:
         try:
             source = library.translation_source_version(video_id)
-            return exporter.preview(
+            return exporter.confirm(
                 video_id,
                 body.asset_id,
                 body.target_version_ids,

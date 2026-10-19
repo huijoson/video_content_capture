@@ -480,7 +480,7 @@ class FlowService:
     ) -> Record:
         video_id, flow_id = str(flow["video_id"]), str(flow["id"])
         asset_id = self._asset_for_flow(flow_id, video_id)
-        preview = self.exporter.preview(
+        confirmed = self.exporter.confirm(
             video_id,
             asset_id,
             [target_version_id],
@@ -490,7 +490,7 @@ class FlowService:
             None,
             snapshot.subtitle_form,
         )
-        return self.exporter.create(video_id, preview)
+        return self.exporter.create(video_id, confirmed)
 
     def _asset_for_flow(self, flow_id: str, video_id: str) -> str:
         for job in self.library.flow_jobs(flow_id):

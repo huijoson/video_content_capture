@@ -1,15 +1,17 @@
 """Immutable subtitle export snapshots, verified stream-copy packaging and burned encodes."""
 
+import hashlib
 import json
 import re
 import shutil
 import sqlite3
 import unicodedata
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from typing import Annotated, BinaryIO, Literal, Self
 from uuid import uuid4
 
@@ -532,10 +534,26 @@ class ExportSnapshot(BaseModel):
         return self
 
 
+@dataclass(frozen=True)
+class ResolvedExport:
+    video: Record
+    asset: Record
+    source: Path
+    targets: tuple[ExportTrack, ...]
+    original: ExportTrack | None
+    tracks: tuple[ExportTrack, ...]
+
+
 class ExportService:
+    # The confirmation cache only proves which snapshots this process encoded; bounded so a
+    # long-lived local service does not accumulate every export the user ever previewed.
+    MAX_CONFIRMATIONS = 256
+
     def __init__(self, library: Library, exporter: MediaExporter | None = None) -> None:
         self.library = library
         self.exporter = exporter or MediaExporter()
+        self._confirmed: OrderedDict[str, None] = OrderedDict()
+        self._confirmation_lock = Lock()
 
     def _track(self, video_id: str, version_id: str) -> ExportTrack:
         from video_content_capture.workspace.subtitles import render_subtitles
@@ -567,7 +585,78 @@ class ExportService:
             pass
         return str(asset["format_id"])
 
-    def preview(
+    @staticmethod
+    def _snapshot_key(snapshot: dict[str, object]) -> str:
+        encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _remember_confirmation(self, snapshot: dict[str, object]) -> None:
+        key = self._snapshot_key(snapshot)
+        with self._confirmation_lock:
+            self._confirmed[key] = None
+            self._confirmed.move_to_end(key)
+            while len(self._confirmed) > self.MAX_CONFIRMATIONS:
+                self._confirmed.popitem(last=False)
+
+    def _was_confirmed(self, snapshot: dict[str, object]) -> bool:
+        key = self._snapshot_key(snapshot)
+        with self._confirmation_lock:
+            return key in self._confirmed
+
+    def _resolve(
+        self,
+        video_id: str,
+        asset_id: str,
+        target_version_ids: list[str],
+        include_original: bool,
+        original_version_id: str | None,
+        source_version_id: str | None,
+        subtitle_form: SubtitleForm,
+    ) -> ResolvedExport:
+        if len(target_version_ids) != 1:
+            raise ValueError("請選擇一份目標字幕版本")
+        video = self.library.get_video(video_id)
+        if video["deleting"]:
+            raise ValueError("影片刪除中")
+        asset, source = self._source(video_id, asset_id)
+        targets = tuple(self._track(video_id, identifier) for identifier in target_version_ids)
+        original = self._track(video_id, original_version_id) if original_version_id else None
+        if source_version_id:
+            self._track(video_id, source_version_id)
+        tracks = tuple(select_tracks(list(targets), original, include_original))
+        if subtitle_form == "burned" and len(tracks) > 2:
+            raise ValueError("燒錄字幕最多包含目標與原文兩軌")
+        return ResolvedExport(video, asset, source, targets, original, tracks)
+
+    def _snapshot(
+        self,
+        resolved: ResolvedExport,
+        asset_id: str,
+        source_version_id: str | None,
+        include_original: bool,
+        original_version_id: str | None,
+        container: Literal["mp4", "mkv"],
+        subtitle_form: SubtitleForm,
+    ) -> dict[str, object]:
+        return ExportSnapshot(
+            asset_id=asset_id,
+            source_version_id=source_version_id,
+            target_version_ids=[t.version_id for t in resolved.targets],
+            target_languages=[t.language for t in resolved.targets],
+            include_original=include_original,
+            original_version_id=original_version_id,
+            container=container,
+            tracks=[
+                SnapshotTrack(version_id=t.version_id, language=t.language, name=t.name)
+                for t in resolved.tracks
+            ],
+            title=str(resolved.video["title"]),
+            youtube_id=str(resolved.video["youtube_id"]),
+            quality=self._quality(resolved.video, resolved.asset),
+            subtitle_form=subtitle_form,
+        ).model_dump()
+
+    def confirm(
         self,
         video_id: str,
         asset_id: str,
@@ -578,71 +667,86 @@ class ExportService:
         container: str | None = None,
         subtitle_form: SubtitleForm = "tracks",
     ) -> dict[str, object]:
-        if len(target_version_ids) != 1:
-            raise ValueError("請選擇一份目標字幕版本")
+        """Run the expensive trial once and return the snapshot a job may consume."""
         if subtitle_form == "burned" and container not in {None, "mp4"}:
             raise ValueError("燒錄字幕成品為 MP4")
-        video = self.library.get_video(video_id)
-        if video["deleting"]:
-            raise ValueError("影片刪除中")
-        asset, source = self._source(video_id, asset_id)
-        targets = [self._track(video_id, identifier) for identifier in target_version_ids]
-        original = self._track(video_id, original_version_id) if original_version_id else None
-        if source_version_id:
-            self._track(video_id, source_version_id)
-        tracks = select_tracks(targets, original, include_original)
+        resolved = self._resolve(
+            video_id,
+            asset_id,
+            target_version_ids,
+            include_original,
+            original_version_id,
+            source_version_id,
+            subtitle_form,
+        )
         with TemporaryDirectory(
-            prefix=".export-preview-", dir=self.library.video_dir(video_id)
+            prefix=".export-confirm-", dir=self.library.video_dir(video_id)
         ) as temp:
             if subtitle_form == "burned":
                 # A short trial encode proves a hardware encoder and the subtitle render up front.
                 self.exporter.burn(
-                    source,
-                    tracks[0],
+                    resolved.source,
+                    resolved.tracks[0],
                     Path(temp),
                     Event(),
                     preview=True,
-                    original=tracks[1] if len(tracks) > 1 else None,
+                    original=resolved.tracks[1] if len(resolved.tracks) > 1 else None,
                 )
-                container = "mp4"
+                actual: Literal["mp4", "mkv"] = "mp4"
             elif container is None:
-                container = self.exporter.preview(source, tracks, Path(temp), Event())
+                probed = self.exporter.preview(
+                    resolved.source, list(resolved.tracks), Path(temp), Event()
+                )
+                actual = "mp4" if probed == "mp4" else "mkv"
             else:
-                self.exporter.mux(source, tracks, container, Path(temp), Event(), preview=True)
-        snapshot = ExportSnapshot(
-            asset_id=asset_id,
-            source_version_id=source_version_id,
-            target_version_ids=[t.version_id for t in targets],
-            target_languages=[t.language for t in targets],
-            include_original=include_original,
-            original_version_id=original_version_id,
-            container="mp4" if container == "mp4" else "mkv",
-            tracks=[
-                SnapshotTrack(version_id=t.version_id, language=t.language, name=t.name)
-                for t in tracks
-            ],
-            title=str(video["title"]),
-            youtube_id=str(video["youtube_id"]),
-            quality=self._quality(video, asset),
-            subtitle_form=subtitle_form,
+                actual = "mp4" if container == "mp4" else "mkv"
+                self.exporter.mux(
+                    resolved.source,
+                    list(resolved.tracks),
+                    actual,
+                    Path(temp),
+                    Event(),
+                    preview=True,
+                )
+        snapshot = self._snapshot(
+            resolved,
+            asset_id,
+            source_version_id,
+            include_original,
+            original_version_id,
+            actual,
+            subtitle_form,
         )
-        return snapshot.model_dump()
+        self._remember_confirmation(snapshot)
+        return snapshot
 
     def create(self, video_id: str, snapshot: dict[str, object]) -> Record:
+        """Consume a confirmed snapshot; job creation performs no media work."""
         confirmed = ExportSnapshot.model_validate(snapshot)
-        verified = self.preview(
+        confirmed_payload = confirmed.model_dump()
+        if not self._was_confirmed(confirmed_payload):
+            raise ValueError("匯出摘要已變更，請重新確認格式與字幕軌")
+        resolved = self._resolve(
             video_id,
             confirmed.asset_id,
             confirmed.target_version_ids,
             confirmed.include_original,
             confirmed.original_version_id,
             confirmed.source_version_id,
+            confirmed.subtitle_form,
+        )
+        expected = self._snapshot(
+            resolved,
+            confirmed.asset_id,
+            confirmed.source_version_id,
+            confirmed.include_original,
+            confirmed.original_version_id,
             confirmed.container,
             confirmed.subtitle_form,
         )
-        if verified != confirmed.model_dump():
+        if expected != confirmed_payload:
             raise ValueError("匯出摘要已變更，請重新確認格式與字幕軌")
-        return self.library.create_snapshot_job(video_id, "export", confirmed.model_dump())
+        return self.library.create_snapshot_job(video_id, "export", confirmed_payload)
 
     def run(self, job: Record, attempt: str, cancel: Event) -> None:
         job_id, video_id = str(job["id"]), str(job["video_id"])
