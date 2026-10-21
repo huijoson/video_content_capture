@@ -3,6 +3,8 @@
 from html.parser import HTMLParser
 from pathlib import Path
 
+import pytest
+
 STATIC = Path(__file__).parents[1] / "src/video_content_capture/workspace/static"
 
 
@@ -173,6 +175,26 @@ def test_a_blocked_flow_names_the_step_that_unblocks_it() -> None:
     assert "source_busy:" in script and "已自動重試" in script
     assert "source_blocked:" in script
     assert "source_unavailable:" in script
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "asr_key_missing",
+        "asr_key_invalid",
+        "asr_permission_denied",
+        "asr_model_missing",
+        "asr_rate_limited",
+        "asr_provider_unavailable",
+        "asr_provider_request_failed",
+        "asr_response_invalid",
+        "asr_media_failed",
+        "asr_unavailable",
+    ],
+)
+def test_every_recognition_failure_has_its_own_explanation(code: str) -> None:
+    script = (STATIC / "workspace.js").read_text()
+    assert f"  {code}: " in script
 
 
 def test_the_flow_stands_before_the_player_with_its_log_folded_in() -> None:

@@ -9,7 +9,7 @@ const languageNames = {
 };
 const languageLabel = (id) => (languageNames[id] ? `${languageNames[id]}（${id}）` : id);
 const sourceTypeLabels = {
-  platform_manual: "平台人工", platform_auto: "平台自動", asr: "本機辨識",
+  platform_manual: "平台人工", platform_auto: "平台自動", asr: "語音辨識",
   import: "匯入", translation: "翻譯",
 };
 const pad2 = (value) => String(value).padStart(2, "0");
@@ -65,6 +65,16 @@ const errorLabels = {
   source_language_unknown: "原語系未知；請從平台字幕選單選擇人工或自動字幕，再取得所選字幕。",
   subtitle_unavailable: "字幕已消失或無法取得，請重新查詢並選擇平台字幕；不會回退辨識。",
   subtitle_acquisition_failed: "字幕清單或取得失敗，請手動重試；未將失敗當作無字幕。",
+  asr_key_missing: "此影片沒有平台字幕，語音辨識需要 Gemini 金鑰：請在專案 .env 設定 GEMINI_API_KEY 並重啟服務；Apple Silicon 可改設 VCC_ASR_BACKEND=mlx 在本機辨識。",
+  asr_key_invalid: "Gemini 金鑰無效，請檢查 .env 的 GEMINI_API_KEY 並重啟服務；若 shell 或編輯器已設定同名環境變數，它會覆蓋 .env，需先清除再重新啟動。",
+  asr_permission_denied: "Gemini 權限不足（403），請確認帳戶與語音辨識模型權限。",
+  asr_model_missing: "語音辨識模型不存在（404），請檢查 VCC_GEMINI_ASR_MODEL。",
+  asr_rate_limited: "Gemini 超過配額（429），字幕尚未建立；請依等待時間手動重試。",
+  asr_provider_unavailable: "Gemini 服務暫時不可用或無回應，字幕尚未建立；請稍後手動重試。",
+  asr_provider_request_failed: "Gemini 語音辨識請求無效，請檢查 VCC_GEMINI_ASR_MODEL。",
+  asr_response_invalid: "語音辨識回應不完整、遭截斷或安全阻擋，未建立字幕；請手動重試。",
+  asr_media_failed: "無法從影音擷取音訊，請確認來源含音軌且本機 ffmpeg 可用後手動重試。",
+  asr_unavailable: "本機語音辨識需要 Apple Silicon Mac 與 mlx-whisper；請改用 VCC_ASR_BACKEND=gemini 並設定 GEMINI_API_KEY，或匯入 SRT／VTT 字幕。",
   translation_key_invalid: "Gemini 金鑰無效，請檢查 .env 的 GEMINI_API_KEY 並重啟服務；若 shell 或編輯器已設定同名環境變數，它會覆蓋 .env，需先清除再重新啟動。",
   translation_permission_denied: "Gemini 權限不足（403），請確認帳戶與模型權限。",
   translation_model_missing: "翻譯模型不存在（404），請檢查 VCC_GEMINI_TRANSLATION_MODEL。",

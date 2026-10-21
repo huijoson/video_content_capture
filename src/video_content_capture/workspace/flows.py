@@ -33,7 +33,7 @@ from video_content_capture.workspace.youtube import SourceMetadata
 ORIGINAL_SOURCE_LABELS: Record = {
     "platform_manual": "人工",
     "platform_auto": "自動",
-    "asr": "本機辨識",
+    "asr": "語音辨識",
     "import": "匯入",
     # Not a source: the platform offers tracks and nothing says which one is the original.
     "platform_choice": "平台字幕（待選擇）",
@@ -261,9 +261,9 @@ class FlowService:
     def _platform_choice_required(source: SourceMetadata) -> bool:
         """Tracks are offered but no metadata says which one carries the original language.
 
-        `acquire_subtitles` refuses to run local recognition while a platform transcript may
+        `acquire_subtitles` refuses to run speech recognition while a platform transcript may
         already exist, and it will not pick between tracks it cannot identify. The plan must
-        therefore announce that choice instead of promising 「本機辨識」 and failing in the
+        therefore announce that choice instead of promising 「語音辨識」 and failing in the
         subtitles stage, after the download has already run.
         """
         return source.original_language is None and bool(source.subtitles)
