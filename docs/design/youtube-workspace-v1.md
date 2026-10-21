@@ -197,8 +197,8 @@ copy）。燒錄依 [ADR 0004](../adr/0004-burned-in-subtitle-export.md) 重新�
 [ADR 0003](../adr/0003-separate-preview-and-export.md) 不轉碼的例外：
 
 - 燒錄單一目標字幕版本，或勾選「附加原文」時燒錄雙語：目標語系在上、原文在下，各自
-  用不同的 ASS 樣式與 cue 時間；成品一律 MP4，視訊為
-  VideoToolbox 硬體編碼 H.264（依解析度給定目標位元率），解析度與來源一致、不縮放；
+  用不同的 ASS 樣式與 cue 時間；成品一律 MP4，視訊為硬體編碼 H.264（依序試 VideoToolbox、
+  NVIDIA NVENC，依解析度給定目標位元率），解析度與來源一致、不縮放；
   來源音訊為 AAC 時 copy，否則轉 AAC。
 - 固定樣式：白字黑邊、置底置中，字級約為影片高度 5%（直式影片以寬度為準），字型依
   語系選 macOS 系統字型（繁中 Heiti TC、簡中 Heiti SC、日文 Hiragino Sans、韓文
@@ -218,7 +218,7 @@ copy）。燒錄依 [ADR 0004](../adr/0004-burned-in-subtitle-export.md) 重新�
   原文區塊則在畫面頂端被裁切。兩份字幕各依自己的 cue 起訖顯示，不合併、不重新對時；
   同一份版本同時是目標與原文時只渲染一行。切換字幕軌的「附加原文」仍維持原文另成一軌，
   不新增雙語單軌。
-- 確認摘要時先以極短片段試編，硬體編碼不可用即明確失敗
+- 確認摘要時先以極短片段試編，VideoToolbox 與 NVENC 皆不可用即明確失敗
   （`hardware_encoder_unavailable`），不回退軟體編碼、不降畫質。
 - 輸出前依目標位元率與片長預檢磁碟空間；進度以 ffmpeg 已處理時長／總時長回報，
   總時長未知時為不定進度；取消即終止 ffmpeg 子程序。
