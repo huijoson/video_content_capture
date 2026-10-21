@@ -27,7 +27,7 @@ from video_content_capture.workspace.subtitles import (
     validate_language,
 )
 from video_content_capture.workspace.translation import TranslationService
-from video_content_capture.workspace.youtube import SourceMetadata
+from video_content_capture.workspace.youtube import SourceError, SourceMetadata
 
 # The confirm screen names the expected original-subtitle source in plain Chinese.
 ORIGINAL_SOURCE_LABELS: Record = {
@@ -312,11 +312,16 @@ class FlowService:
             return
         if job["flow_id"] is None:
             return
-        flow_id = str(job["flow_id"])
+        self._advance_or_fail(str(job["flow_id"]), job)
+
+    def _advance_or_fail(self, flow_id: str, job: Record) -> Record:
+        """A broken chain ends the flow, under the cause's own code when it names one."""
         try:
-            self.advance(flow_id, job)
+            return self.advance(flow_id, job)
+        except SourceError as error:
+            return self.library.update_flow(flow_id, status="failed", error=error.code)
         except Exception:
-            self.library.update_flow(flow_id, status="failed", error="flow_failed")
+            return self.library.update_flow(flow_id, status="failed", error="flow_failed")
 
     def _stage_job(self, flow_id: str, stage: str) -> Record | None:
         """The job that carries the flow's current stage, if it was ever created."""
@@ -375,7 +380,7 @@ class FlowService:
         self.library.reopen_flow(flow_id)
         if str(job["status"]) == "completed":
             # The stage succeeded and chaining failed; redo the chaining, not the stage.
-            return self.status(str(self.advance(flow_id, job)["id"]))
+            return self.status(str(self._advance_or_fail(flow_id, job)["id"]))
         self.library.retry_job(str(job["id"]))
         self.enqueue(self.library.get_job(str(job["id"])))
         return self.status(flow_id)
