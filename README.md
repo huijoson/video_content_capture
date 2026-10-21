@@ -113,14 +113,21 @@ uv run vcc serve --project-dir . --host 127.0.0.1 --port 8765
 只有一個已保存解析度時不顯示解析度選單，改由來源行讀出；匯出的容器選擇只在「可切換
 字幕軌」出現，原文版本只在勾選「附加原文」時出現，「翻譯」與「重新翻譯」依是否已有
 同一份譯文只顯示一顆。
-可查詢單支影片、選畫質／音軌、下載保存與播放，取得平台原文字幕或本機多語辨識、匯入
+可查詢單支影片、選畫質／音軌、下載保存與播放，取得平台原文字幕或語音辨識、匯入
 UTF-8 SRT／VTT、以選定版本進行 Gemini 翻譯與影片問答，並確認格式與字幕軌後匯出影片。
 
 字幕匯入上限 10 MiB／100,000 cues，同名建立新版本；超出片長最多 1 秒時裁切並顯示
 警告，其餘時間錯誤拒絕。播放、翻譯來源與匯出字幕分開選擇，播放切換不建立工作。
-平台字幕清單失敗可手動重試，不當作無字幕；只有確認無原文字幕才本機辨識。原語系未知
+平台字幕清單失敗可手動重試，不當作無字幕；只有確認無原文字幕才語音辨識。原語系未知
 而平台已有字幕時，確認畫面顯示「平台字幕（待選擇）」並在開始前阻擋：先取得所選平台
 字幕並指名翻譯來源，再開始一鍵流程。
+
+語音辨識預設使用 Gemini，需要 `GEMINI_API_KEY`。本機 ffmpeg 先從影音抽出單聲道 16 kHz
+Opus 音訊，每 180 秒一段上傳給 `VCC_GEMINI_ASR_MODEL`，再把各段的時間換算回整支影片；
+較長的單段請求實測會漏掉結尾。設定 `VCC_ASR_BACKEND=mlx` 時改在 Apple Silicon 本機以
+MLX Whisper 辨識，音訊不離開本機；其他機器選 mlx 會回報本機辨識不可用。辨識失敗時，
+工作會說明原因（缺少或無效的金鑰、權限、模型不存在、配額與建議等待時間、服務無回應、
+回應無效、音訊擷取失敗），SDK 不自動重送，由使用者手動重試。
 
 翻譯缺 `GEMINI_API_KEY` 時停用；每塊 100 cues，成功塊保存，失敗由使用者重試，SDK
 不自動重送。下載、字幕、翻譯、預覽與匯出共用單一媒體 worker 串行執行；問答另有
@@ -169,6 +176,9 @@ UTF-8 SRT／VTT、以選定版本進行 Gemini 翻譯與影片問答，並確認
 - `GEMINI_API_KEY`：僅後端讀取，`GOOGLE_API_KEY` 不作後備；不接受金鑰 CLI 參數。
 - `VCC_GEMINI_TRANSLATION_MODEL`：預設 `gemini-3.5-flash-lite`。
 - `VCC_GEMINI_QA_MODEL`：預設 `gemini-3.8-flash`。
+- `VCC_ASR_BACKEND`：無平台字幕時的語音辨識，`gemini`（預設，上傳音訊）或 `mlx`
+  （Apple Silicon 本機）；其他值會讓 `serve` 啟動失敗。
+- `VCC_GEMINI_ASR_MODEL`：Gemini 語音辨識模型，預設 `gemini-3.8-flash`。
 - `VCC_LIBRARY_DIR`：預設 `outputs/library/`；相對路徑以專案根目錄為基準。
 - `VCC_HOST`／`VCC_PORT`：預設 `127.0.0.1`／`8765`。
 
@@ -368,12 +378,14 @@ Canonical report 保留六個 section：
 - 轉錄會把抽出的音訊送往 AssemblyAI；報告會把結構化逐字稿 segments 送往 Anthropic。
 - 選擇 `--transcription-backend mlx` 時，轉錄在 Apple Silicon 本機執行，媒體不會送往
   AssemblyAI；單獨執行 `transcribe` 也不會呼叫 Anthropic。
+- `vcc serve` 遇到沒有平台字幕的影片時，預設把抽出的音訊片段送往 Gemini 辨識；設定
+  `VCC_ASR_BACKEND=mlx` 可讓辨識留在 Apple Silicon 本機。翻譯與問答會把字幕文字送往 Gemini。
 - 原始 MP4 不會上傳，但音訊本身仍可能包含敏感資訊。使用前請確認你有權處理與傳送內容。
 - 本機 raw payload、JSON、Markdown、manifest 與 metadata 可能包含逐字內容，請依組織的資料保留、
   加密與刪除政策管理。
 - 預設只在完整成功後刪除抽出的 audio；raw provider data 與 canonical artifacts 會保留供稽核與 resume。
 - `.env` 與 output/cache 目錄已在 `.gitignore`，但仍應確認備份與同步工具不會外洩資料。
-- 請另外查閱 AssemblyAI 與 Anthropic 的最新隱私、資料保留與區域政策。
+- 請另外查閱 AssemblyAI、Anthropic 與 Google Gemini API 的最新隱私、資料保留與區域政策。
 
 ## 成本估算
 
