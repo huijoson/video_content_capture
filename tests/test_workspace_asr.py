@@ -1,6 +1,7 @@
 """Gemini subtitle recognition against a fake provider and a fake ffmpeg."""
 
 import json
+from itertools import pairwise
 from pathlib import Path
 from threading import Event
 
@@ -109,20 +110,51 @@ def test_chunks_are_recognised_in_order_and_shifted_to_absolute_time() -> None:
     gemini = FakeGemini(
         [
             reply("ja", (0.5, 4.0, "一つ目"), (170.0, 179.5, "二つ目")),
-            reply("ja", (1.0, 6.0, "三つ目")),
-            reply("ja", (0.0, 20.0, "四つ目")),
+            reply("ja", (1.0, 179.0, "三つ目")),
+            reply("ja", (0.0, 29.5, "四つ目")),
         ]
     )
     language, cues = transcribe(gemini, 2 * CHUNK_SECONDS + 30)
-    assert gemini.audio == [b"audio@0", b"audio@180", b"audio@360"]
+    assert gemini.audio == [b"audio@0.000", b"audio@180.000", b"audio@360.000"]
     assert language == "ja"
     assert [(cue.id, cue.start, cue.end, cue.text) for cue in cues] == [
         ("c000001", 0.5, 4.0, "一つ目"),
         ("c000002", 170.0, 179.5, "二つ目"),
-        ("c000003", 181.0, 186.0, "三つ目"),
-        # The last chunk is only 30 s long, so its 20 s segment is kept whole.
-        ("c000004", 360.0, 380.0, "四つ目"),
+        ("c000003", 181.0, 359.0, "三つ目"),
+        ("c000004", 360.0, 389.5, "四つ目"),
     ]
+
+
+def test_a_chunk_that_stops_early_is_heard_again_from_where_it_stopped() -> None:
+    gemini = FakeGemini(
+        [
+            reply("en", (0.0, 10.0, "one"), (10.0, 150.1234, "two")),
+            # Speech resumes at the clip start; the rounded -ss lands just before 150.1234.
+            reply("en", (0.0, 4.0, "three"), (4.0, 175.0, "four")),
+            reply("en", (0.0, 74.5, "five")),
+        ]
+    )
+    _, cues = transcribe(gemini, 400)
+    assert gemini.audio == [b"audio@0.000", b"audio@150.123", b"audio@325.123"]
+    times = [(cue.start, cue.end) for cue in cues]
+    assert times == pytest.approx(
+        [(0, 10), (10, 150.1234), (150.1234, 154.123), (154.123, 325.123), (325.123, 399.623)]
+    )
+    assert all(left[1] <= right[0] for left, right in pairwise(times))
+
+
+def test_a_chunk_with_no_speech_advances_by_the_whole_chunk() -> None:
+    gemini = FakeGemini([reply("en"), reply("en"), reply("en", (0.0, 1.0, "end"))])
+    _, cues = transcribe(gemini, 2 * CHUNK_SECONDS + 10)
+    assert gemini.audio == [b"audio@0.000", b"audio@180.000", b"audio@360.000"]
+    assert [(cue.start, cue.end) for cue in cues] == [(360.0, 361.0)]
+
+
+def test_a_chunk_that_returns_almost_nothing_still_advances_the_minimum() -> None:
+    gemini = FakeGemini([reply("en", (0.0, 1.0, "hi")) for _ in range(4)])
+    _, cues = transcribe(gemini, 120)
+    assert gemini.audio == [b"audio@0.000", b"audio@30.000", b"audio@60.000", b"audio@90.000"]
+    assert [cue.start for cue in cues] == [0.0, 30.0, 60.0, 90.0]
 
 
 def test_client_uses_the_configured_key_model_and_no_sdk_retries() -> None:
