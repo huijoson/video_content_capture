@@ -999,3 +999,41 @@ def test_unknown_language_without_platform_tracks_still_plans_local_recognition(
             "completed",
         ]
         assert recognized == [None]
+
+
+@pytest.mark.parametrize(
+    ("backend", "code"),
+    [
+        # Gemini recognition starts by extracting audio, which the fake media cannot supply.
+        ("gemini", "asr_media_failed"),
+        ("mlx", "asr_unavailable"),
+    ],
+)
+def test_configured_backend_recognises_media_without_platform_subtitles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str, code: str
+) -> None:
+    from video_content_capture.domain.errors import ConfigurationError
+
+    def no_mlx() -> object:
+        raise ConfigurationError("MLX transcription requires an Apple Silicon Mac")
+
+    monkeypatch.setattr("video_content_capture.transcription.mlx._load_mlx_transcribe", no_mlx)
+    settings = replace(
+        load_settings(tmp_path), gemini_api_key=SecretStr("fake-api-sentinel"), asr_backend=backend
+    )
+    with TestClient(
+        create_app(
+            settings,
+            FlowAdapter(None),
+            translation_adapter=FakeTranslation(),
+            media_exporter=MediaExporter(FakeFFmpeg()),
+        ),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        started = start_flow(client, video["id"], "zh-TW")
+        assert started.status_code == 200, started.text
+        status = wait_for_flow(client, started.json()["flow"]["id"], expect="failed")
+        assert status["stages"][1]["error_code"] == code

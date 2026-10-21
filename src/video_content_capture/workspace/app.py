@@ -1,7 +1,7 @@
 """Local workspace API with independently selected subtitle versions."""
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal, cast
@@ -12,7 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from video_content_capture import __version__
-from video_content_capture.workspace.config import WorkspaceSettings, validate_binding
+from video_content_capture.workspace.asr import GeminiSubtitleAdapter
+from video_content_capture.workspace.config import ASRBackend, WorkspaceSettings, validate_binding
 from video_content_capture.workspace.exports import ExportService, MediaExporter
 from video_content_capture.workspace.flows import (
     BUSY_MESSAGE,
@@ -33,6 +34,7 @@ from video_content_capture.workspace.subtitles import (
     AcquisitionService,
     ASRAdapter,
     Cue,
+    MLXSubtitleAdapter,
     parse_subtitles,
     render_subtitles,
 )
@@ -44,6 +46,11 @@ from video_content_capture.workspace.youtube import (
     YtDlpAdapter,
     parse_youtube_url,
 )
+
+ASR_ADAPTERS: dict[ASRBackend, Callable[[WorkspaceSettings], ASRAdapter]] = {
+    "gemini": GeminiSubtitleAdapter,
+    "mlx": lambda settings: MLXSubtitleAdapter(),
+}
 
 # Bounded wait for media workers to stop before managed files are removed.
 DELETE_WAIT_SECONDS = 10.0
@@ -146,7 +153,10 @@ def create_app(
     translation = TranslationService(library, settings, translation_adapter)
     qa = QAService(library, settings, qa_adapter)
     acquisition = AcquisitionService(
-        library, downloader, asr_adapter, scrub=lambda value: public_text(value, settings)
+        library,
+        downloader,
+        asr_adapter or ASR_ADAPTERS[settings.asr_backend](settings),
+        scrub=lambda value: public_text(value, settings),
     )
     exporter = ExportService(library, media_exporter)
     previews = PreviewService(library, preview_encoder)
