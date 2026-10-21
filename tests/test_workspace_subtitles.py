@@ -296,7 +296,7 @@ def test_an_exact_regional_track_still_wins_over_its_base_language(tmp_path: Pat
 
     class ASR:
         def transcribe(self, *args: object) -> object:
-            raise AssertionError("An exact regional track exists, so local recognition must not run")
+            raise AssertionError("An exact regional track exists, so recognition must not run")
 
     language, kind, parsed = acquire_subtitles(
         Adapter(), ASR(), source, tmp_path / "media", Event()
