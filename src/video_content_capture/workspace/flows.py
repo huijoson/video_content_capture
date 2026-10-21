@@ -27,7 +27,7 @@ from video_content_capture.workspace.subtitles import (
     validate_language,
 )
 from video_content_capture.workspace.translation import TranslationService
-from video_content_capture.workspace.youtube import SourceMetadata
+from video_content_capture.workspace.youtube import SourceError, SourceMetadata
 
 # The confirm screen names the expected original-subtitle source in plain Chinese.
 ORIGINAL_SOURCE_LABELS: Record = {
@@ -305,18 +305,14 @@ class FlowService:
         return flow, job
 
     def on_job_finished(self, job_id: str) -> None:
-        """Completion hook; a broken chain fails the flow rather than the worker."""
+        """Completion hook run on the worker thread after every job."""
         try:
             job = self.library.get_job(job_id)
         except ValueError:
             return
         if job["flow_id"] is None:
             return
-        flow_id = str(job["flow_id"])
-        try:
-            self.advance(flow_id, job)
-        except Exception:
-            self.library.update_flow(flow_id, status="failed", error="flow_failed")
+        self.advance(str(job["flow_id"]), job)
 
     def _stage_job(self, flow_id: str, stage: str) -> Record | None:
         """The job that carries the flow's current stage, if it was ever created."""
@@ -393,7 +389,15 @@ class FlowService:
             return self.library.update_flow(
                 flow_id, status="failed", error=str(job["error_code"] or status)
             )
-        video_id = str(flow["video_id"])
+        try:
+            return self._next_stage(flow, job)
+        except Exception as error:
+            # A flow left running here blocks every later start and retry of this video.
+            code = error.code if isinstance(error, SourceError) else "flow_failed"
+            return self.library.update_flow(flow_id, status="failed", error=code)
+
+    def _next_stage(self, flow: Record, job: Record) -> Record:
+        flow_id, video_id = str(flow["id"]), str(flow["video_id"])
         snapshot = FlowSnapshot.model_validate_json(str(flow["snapshot"]))
         kind = str(job["kind"])
         if kind == "export":

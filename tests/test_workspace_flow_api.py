@@ -708,10 +708,9 @@ def test_retry_after_a_chaining_failure_redoes_only_the_chain(tmp_path: Path) ->
     """A stage that succeeded while the next job could not be built is retryable as is.
 
     A `FakeFFmpeg` with no encoders refuses the hardware probe, and the burned export probes
-    it while *building* the export job — inside `FlowService._export_job`, which runs inside
-    `advance()`. So the translation stage completes and the flow dies in chaining with
-    `error_code == "flow_failed"`, `stage` still `translation` and no export job at all. That
-    is exactly the `completed`-stage branch of spec §5.2 step 6.
+    it while *building* the export job. So the translation stage completes and the flow ends
+    failed with the probe's own code, `stage` still `translation` and no export job at all.
+    A retry that hits the same refusal must end the flow the same way, never leave it running.
     """
     runner = FakeFFmpeg()
     runner.encoders = set()
@@ -726,7 +725,7 @@ def test_retry_after_a_chaining_failure_redoes_only_the_chain(tmp_path: Path) ->
         flow_id = _flow_id(library, started.json()["flow"]["id"])
         status = wait_for_flow(client, flow_id, expect="failed")
         assert status["flow"]["stage"] == "translation"
-        assert status["flow"]["error_code"] == "flow_failed"
+        assert status["flow"]["error_code"] == "hardware_encoder_unavailable"
         assert translation.calls == 1
         translated = next(job for job in library.flow_jobs(flow_id) if job["kind"] == "translation")
         translated_id, attempt = str(translated["id"]), str(translated["attempt_id"])
@@ -739,6 +738,12 @@ def test_retry_after_a_chaining_failure_redoes_only_the_chain(tmp_path: Path) ->
         ]
         published = [asset["id"] for asset in library.assets(video["id"])]
         assert published
+
+        refused = client.post(f"/api/flows/{flow_id}/retry", headers=ORIGIN)
+        assert refused.status_code == 200, refused.text
+        assert refused.json()["flow"]["status"] == "failed"
+        assert refused.json()["flow"]["error_code"] == "hardware_encoder_unavailable"
+        assert library.get_flow(flow_id)["status"] == "failed"
 
         runner.encoders = {"h264_nvenc"}
         resumed = client.post(f"/api/flows/{flow_id}/retry", headers=ORIGIN)
