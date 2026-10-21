@@ -1,13 +1,14 @@
 """Fixed-style burned-in subtitles: ASS rendering, line wrapping and encode planning.
 
-Burned exports always re-encode (ADR 0004): H.264 through VideoToolbox plus AAC in MP4,
-at the source resolution. The subtitle style is fixed: white text with a black outline,
-bottom centre, size scaled to the video height and a CJK-capable macOS system font.
-Bilingual burning keeps the target language on top and the original below it in a
-smaller font, each version following its own cue times in its own style. Each version
-wraps at its own font size, and the target's bottom margin reserves the original's whole
-rendered block — the tallest original cue, in lines, capped at :data:`MARGIN_CLAMP_SCALE`
-so a single enormous cue cannot push the target off the frame.
+Burned exports always re-encode (ADR 0004): H.264 through a hardware encoder (VideoToolbox
+or NVIDIA NVENC, never software) plus AAC in MP4, at the source resolution. The subtitle
+style is fixed: white text with a black outline, bottom centre, size scaled to the video
+height and a CJK-capable macOS system font. Bilingual burning keeps the target language on
+top and the original below it in a smaller font, each version following its own cue times
+in its own style. Each version wraps at its own font size, and the target's bottom margin
+reserves the original's whole rendered block — the tallest original cue, in lines, capped
+at :data:`MARGIN_CLAMP_SCALE` so a single enormous cue cannot push the target off the
+frame.
 
 Two independent mechanisms keep the target above the original. The reserved block keeps
 the two bands from overlapping in the common case, and the target is emitted on a higher

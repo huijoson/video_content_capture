@@ -707,14 +707,14 @@ def test_retry_resumes_the_failed_stage_without_downloading_again(tmp_path: Path
 def test_retry_after_a_chaining_failure_redoes_only_the_chain(tmp_path: Path) -> None:
     """A stage that succeeded while the next job could not be built is retryable as is.
 
-    `FakeFFmpeg(hardware=False)` refuses the VideoToolbox probe, and the burned export probes
+    A `FakeFFmpeg` with no encoders refuses the hardware probe, and the burned export probes
     it while *building* the export job — inside `FlowService._export_job`, which runs inside
     `advance()`. So the translation stage completes and the flow dies in chaining with
     `error_code == "flow_failed"`, `stage` still `translation` and no export job at all. That
     is exactly the `completed`-stage branch of spec §5.2 step 6.
     """
     runner = FakeFFmpeg()
-    runner.hardware = False
+    runner.encoders = set()
     translation = FakeTranslation()
     adapter = FlowAdapter("en")
     client, library = make_flow_client(tmp_path, adapter, runner, translation)
@@ -740,7 +740,7 @@ def test_retry_after_a_chaining_failure_redoes_only_the_chain(tmp_path: Path) ->
         published = [asset["id"] for asset in library.assets(video["id"])]
         assert published
 
-        runner.hardware = True
+        runner.encoders = {"h264_nvenc"}
         resumed = client.post(f"/api/flows/{flow_id}/retry", headers=ORIGIN)
         assert resumed.status_code == 200, resumed.text
         finished = wait_for_flow(client, flow_id)
