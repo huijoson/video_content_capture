@@ -34,7 +34,7 @@ class QAError(ValueError):
 
 
 def provider_error(error: errors.APIError) -> str:
-    return translation_provider_error(error).replace("translation_", "qa_", 1)
+    return translation_provider_error(error, "qa")
 
 
 class VideoClaim(BaseModel):
