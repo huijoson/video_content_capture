@@ -175,10 +175,23 @@ class BurnPlan:
         return int((self.video_bitrate + audio) * self.duration / 8)
 
 
+@dataclass(frozen=True)
+class HardwareEncoder:
+    name: str
+    arguments: tuple[str, ...]
+
+
+HARDWARE_ENCODERS = (
+    HardwareEncoder("VideoToolbox", ("-c:v", "h264_videotoolbox", "-allow_sw", "0")),
+    HardwareEncoder("NVENC", ("-c:v", "h264_nvenc")),
+)
+
+
 def _hardware_unavailable() -> SourceError:
     return SourceError(
         "hardware_encoder_unavailable",
-        "VideoToolbox 硬體編碼不可用，無法燒錄字幕；不會改用軟體編碼或降低畫質",
+        "無可用的 H.264 硬體編碼（VideoToolbox 或 NVIDIA NVENC），無法燒錄字幕；"
+        "不會改用軟體編碼或降低畫質",
     )
 
 
@@ -186,33 +199,33 @@ class MediaExporter:
     def __init__(self, runner: ProcessRunner = run_process) -> None:
         self.runner = runner
 
-    def require_hardware(self, cancel: Event) -> None:
-        """Encode a tiny clip with VideoToolbox; never fall back to software encoding."""
-        try:
-            self.runner(
-                [
-                    "ffmpeg",
-                    "-nostdin",
-                    "-v",
-                    "error",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "color=c=black:s=320x240:r=10:d=0.2",
-                    "-c:v",
-                    "h264_videotoolbox",
-                    "-allow_sw",
-                    "0",
-                    "-f",
-                    "null",
-                    "-",
-                ],
-                cancel,
-            )
-        except SourceError:
-            if cancel.is_set():
-                raise
-            raise _hardware_unavailable() from None
+    def hardware_encoder(self, cancel: Event) -> HardwareEncoder:
+        """Return the first encoder that encodes a tiny clip; never fall back to software."""
+        for encoder in HARDWARE_ENCODERS:
+            try:
+                self.runner(
+                    [
+                        "ffmpeg",
+                        "-nostdin",
+                        "-v",
+                        "error",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "color=c=black:s=320x240:r=10:d=0.2",
+                        *encoder.arguments,
+                        "-f",
+                        "null",
+                        "-",
+                    ],
+                    cancel,
+                )
+            except SourceError:
+                if cancel.is_set():
+                    raise
+                continue
+            return encoder
+        raise _hardware_unavailable()
 
     def _probe(self, path: Path, cancel: Event) -> tuple[list[dict[str, object]], Record]:
         try:
@@ -284,9 +297,9 @@ class MediaExporter:
         preview: bool = False,
         original: ExportTrack | None = None,
     ) -> Path:
-        """Draw one subtitle version into the picture: H.264 (VideoToolbox) + AAC MP4."""
+        """Draw one subtitle version into the picture: hardware H.264 + AAC MP4."""
         plan = self.burn_plan(source, cancel)
-        self.require_hardware(cancel)
+        encoder = self.hardware_encoder(cancel)
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         subtitle = directory / "burned.ass"
         layout = SubtitleLayout(plan.width, plan.height)
@@ -307,7 +320,7 @@ class MediaExporter:
         arguments += ["-i", str(source), "-map", "0:v:0", "-map", "0:a:0?"]
         # The subtitles filter draws in source pixels; nothing scales the picture.
         arguments += ["-vf", f"subtitles=filename={filter_value(str(subtitle))}"]
-        arguments += ["-c:v", "h264_videotoolbox", "-allow_sw", "0", "-profile:v", "high"]
+        arguments += [*encoder.arguments, "-profile:v", "high"]
         arguments += ["-b:v", str(plan.video_bitrate), "-pix_fmt", "yuv420p"]
         if plan.audio_codec == "aac":
             arguments += ["-c:a", "copy"]
@@ -582,7 +595,7 @@ class ExportService:
             prefix=".export-preview-", dir=self.library.video_dir(video_id)
         ) as temp:
             if subtitle_form == "burned":
-                # A short trial encode proves VideoToolbox and the subtitle render up front.
+                # A short trial encode proves a hardware encoder and the subtitle render up front.
                 self.exporter.burn(
                     source,
                     tracks[0],

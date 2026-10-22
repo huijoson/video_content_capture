@@ -536,7 +536,9 @@ def create_app(
         except SourceError as error:
             if error.code == "hardware_encoder_unavailable":
                 raise HTTPException(
-                    409, "此 Mac 無法使用 VideoToolbox 硬體編碼，無法燒錄字幕（不改用軟體編碼）"
+                    409,
+                    "本機無可用的 H.264 硬體編碼（VideoToolbox 或 NVIDIA NVENC），"
+                    "無法燒錄字幕（不改用軟體編碼）",
                 ) from None
             raise HTTPException(400, "請選擇有效影音及完整字幕，並確認本機 ffmpeg 可用") from None
         except ValueError:

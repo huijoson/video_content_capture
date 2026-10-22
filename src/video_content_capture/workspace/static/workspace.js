@@ -88,7 +88,7 @@ const errorLabels = {
   translation_empty: "翻譯含空文字，未發佈；請手動重試。",
   translation_failed: "翻譯失敗，已完成塊保留；請檢查設定並手動重試。",
   download_failed: "下載失敗，請確認網路及公開來源可用後手動重試。",
-  hardware_encoder_unavailable: "VideoToolbox 硬體編碼不可用，無法燒錄字幕；不會改用軟體編碼或降低畫質。來源與字幕已保留。",
+  hardware_encoder_unavailable: "無可用的 H.264 硬體編碼（VideoToolbox 或 NVIDIA NVENC），無法燒錄字幕；不會改用軟體編碼或降低畫質。來源與字幕已保留。",
   burn_failed: "燒錄字幕輸出失敗；來源與字幕已保留，可手動重試。",
 };
 const stageLabels = {
