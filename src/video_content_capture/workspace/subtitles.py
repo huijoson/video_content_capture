@@ -81,6 +81,9 @@ def validate_language(language: str) -> str:
     return language
 
 
+ORIGINAL_SUFFIX = "-orig"
+
+
 def _primary_subtag(language: str) -> str:
     return language.split("-", maxsplit=1)[0].casefold()
 
@@ -351,12 +354,17 @@ def acquire_subtitles(
                 "Original language unknown; choose a platform subtitle track",
             )
         candidates = matching_tracks(refreshed.subtitles, language)
-        selected = next((item for item in candidates if not item.automatic), None)
-        selected = selected or next(iter(candidates), None)
+        # YouTube's automatic `en` can be a machine translation of another language's captions
+        # (`tlang`), which the platform answers with 429; `en-orig` is the speech itself.
+        selected = (
+            next((item for item in candidates if not item.automatic), None)
+            or next((item for item in candidates if item.language.endswith(ORIGINAL_SUFFIX)), None)
+            or next(iter(candidates), None)
+        )
     if selected is not None:
         data = adapter.download_subtitle(refreshed, selected, cancel)
         return (
-            selected.language,
+            selected.language.removesuffix(ORIGINAL_SUFFIX),
             ("platform_auto" if selected.automatic else "platform_manual"),
             parse_subtitles(data, "vtt", source.duration),
         )

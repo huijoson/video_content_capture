@@ -259,6 +259,51 @@ def test_a_region_tagged_original_still_finds_its_base_language_track(tmp_path: 
     assert calls == ["manual"]
 
 
+def test_the_original_automatic_track_wins_over_a_translated_one(tmp_path: Path) -> None:
+    """YouTube's automatic `en` may be translated from another language and rejected with 429;
+    the original-language recognition is keyed `en-orig`."""
+    from threading import Event
+
+    from video_content_capture.workspace.subtitles import acquire_subtitles
+    from video_content_capture.workspace.youtube import SourceMetadata, SubtitleTrack
+
+    source = SourceMetadata(
+        youtube_id="abcdefghijk",
+        source_url="https://youtube.com",
+        title="one",
+        duration=10,
+        formats=[],
+        audio_tracks=[],
+        subtitles=[
+            SubtitleTrack(language="en", automatic=True, extensions=["vtt"]),
+            SubtitleTrack(language="en-orig", automatic=True, extensions=["vtt"]),
+        ],
+        default_format_id="v",
+        default_audio_id="a",
+        above_1080p=False,
+        original_language="en-US",
+    )
+    requested: list[str] = []
+
+    class Adapter:
+        def query(self, *args: object) -> SourceMetadata:
+            return source
+
+        def download_subtitle(
+            self, _source: object, track: SubtitleTrack, _cancel: object
+        ) -> bytes:
+            requested.append(track.language)
+            return b"WEBVTT\n\n00:01.000 --> 00:02.000\nhello"
+
+    class ASR:
+        def transcribe(self, *args: object) -> object:
+            raise AssertionError("A platform track exists, so local recognition must not run")
+
+    language, kind, _ = acquire_subtitles(Adapter(), ASR(), source, tmp_path / "media", Event())
+    assert requested == ["en-orig"]
+    assert (language, kind) == ("en", "platform_auto")
+
+
 def test_an_exact_regional_track_still_wins_over_its_base_language(tmp_path: Path) -> None:
     """Falling back to the primary subtag must not displace an exact regional track.
 
