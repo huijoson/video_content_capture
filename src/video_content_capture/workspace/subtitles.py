@@ -1,5 +1,6 @@
 """Bounded plain-text subtitle parsing and multilingual source acquisition."""
 
+import logging
 import math
 import re
 from collections.abc import Callable, Sequence
@@ -28,6 +29,7 @@ _LANGUAGE = re.compile(r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*\Z")
 _TIMESTAMP = re.compile(r"(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{3})\Z")
 _VTT_HEADER_FIELD = re.compile(r"[A-Za-z][A-Za-z0-9-]*: ")
 _VTT_INLINE_TIMESTAMP = re.compile(r"<\d{1,3}:\d{2}:\d{2}\.\d{3}>")
+logger = logging.getLogger("vcc.workspace")
 
 
 class Cue(BaseModel):
@@ -275,11 +277,17 @@ class MLXSubtitleAdapter:
     def transcribe(
         self, path: Path, language: str | None, duration: float, cancel: Event
     ) -> tuple[str, list[Cue]]:
+        from video_content_capture.domain.errors import ConfigurationError
         from video_content_capture.transcription.mlx import _load_mlx_transcribe
 
         if cancel.is_set():
             raise ValueError("Cancelled")
-        transcribe = self.transcribe_fn or _load_mlx_transcribe()
+        try:
+            transcribe = self.transcribe_fn or _load_mlx_transcribe()
+        except ConfigurationError:
+            raise SourceError(
+                "asr_unavailable", "本機語音辨識需要 Apple Silicon 與 mlx-whisper"
+            ) from None
         payload = transcribe(
             str(path),
             path_or_hf_repo=self.model,
@@ -361,12 +369,12 @@ class AcquisitionService:
         self,
         library: "Library",
         adapter: YoutubeAdapter,
-        asr: ASRAdapter | None = None,
+        asr: ASRAdapter,
         scrub: Callable[[str], str] = scrub_text,
     ) -> None:
         self.library = library
         self.adapter = adapter
-        self.asr = asr or MLXSubtitleAdapter()
+        self.asr = asr
         self.scrub = scrub
 
     def create(
@@ -473,7 +481,11 @@ class AcquisitionService:
             )
         except SourceError as error:
             self.library.update_attempt(str(job["id"]), attempt, "subtitles", error=error.code)
-        except Exception:
+        except Exception as error:
+            # The type name only: messages can carry provider text, media paths or secrets.
+            logger.warning(
+                "Subtitle acquisition failed job=%s error=%s", job["id"], type(error).__name__
+            )
             self.library.update_attempt(
                 str(job["id"]), attempt, "subtitles", error="subtitle_acquisition_failed"
             )

@@ -188,7 +188,7 @@ def test_confirm_names_the_platform_track_for_a_region_tagged_original(tmp_path:
     """A region-tagged original must still announce the platform track it will actually use.
 
     `_expected_original` matched the track language exactly, so an `en-US` source promised
-    「本機辨識」 even though the flow went on to download the `en` platform track.
+    「語音辨識」 even though the flow went on to download the `en` platform track.
     """
     adapter = FlowAdapter("en-US", track_language="en")
     with TestClient(
@@ -890,7 +890,7 @@ def test_dangling_translation_source_pointer_does_not_brick_the_flow(tmp_path: P
 def test_unknown_language_with_platform_tracks_requires_an_explicit_source(
     tmp_path: Path,
 ) -> None:
-    """The acquisition never guesses between platform tracks, so the plan cannot promise 本機辨識.
+    """The acquisition never guesses between platform tracks, so the plan cannot promise 語音辨識.
 
     Flows 62cd661d and 9711393c of the real library died in the subtitles stage after the whole
     video had been downloaded: the confirm screen announced local recognition, but the
@@ -991,7 +991,7 @@ def test_unknown_language_without_platform_tracks_still_plans_local_recognition(
         plan = confirm(client, video["id"], height=720, target_language="zh-TW").json()
         assert plan["original_language"] is None
         assert plan["original_source"] == "asr"
-        assert plan["original_source_label"] == "本機辨識"
+        assert plan["original_source_label"] == "語音辨識"
         assert plan["blocked_reason"] is None
         started = start_flow(client, video["id"], "zh-TW")
         assert started.status_code == 200, started.text
@@ -1004,3 +1004,41 @@ def test_unknown_language_without_platform_tracks_still_plans_local_recognition(
             "completed",
         ]
         assert recognized == [None]
+
+
+@pytest.mark.parametrize(
+    ("backend", "code"),
+    [
+        # Gemini recognition starts by extracting audio, which the fake media cannot supply.
+        ("gemini", "asr_media_failed"),
+        ("mlx", "asr_unavailable"),
+    ],
+)
+def test_configured_backend_recognises_media_without_platform_subtitles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str, code: str
+) -> None:
+    from video_content_capture.domain.errors import ConfigurationError
+
+    def no_mlx() -> object:
+        raise ConfigurationError("MLX transcription requires an Apple Silicon Mac")
+
+    monkeypatch.setattr("video_content_capture.transcription.mlx._load_mlx_transcribe", no_mlx)
+    settings = replace(
+        load_settings(tmp_path), gemini_api_key=SecretStr("fake-api-sentinel"), asr_backend=backend
+    )
+    with TestClient(
+        create_app(
+            settings,
+            FlowAdapter(None),
+            translation_adapter=FakeTranslation(),
+            media_exporter=MediaExporter(FakeFFmpeg()),
+        ),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        video = client.post(
+            "/api/query", json={"url": "https://youtu.be/abcdefghijk"}, headers=ORIGIN
+        ).json()
+        started = start_flow(client, video["id"], "zh-TW")
+        assert started.status_code == 200, started.text
+        status = wait_for_flow(client, started.json()["flow"]["id"], expect="failed")
+        assert status["stages"][1]["error_code"] == code

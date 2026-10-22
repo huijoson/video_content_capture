@@ -17,6 +17,8 @@ def isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         "GOOGLE_API_KEY",
         "VCC_GEMINI_TRANSLATION_MODEL",
         "VCC_GEMINI_QA_MODEL",
+        "VCC_ASR_BACKEND",
+        "VCC_GEMINI_ASR_MODEL",
         "VCC_LIBRARY_DIR",
         "VCC_HOST",
         "VCC_PORT",
@@ -168,3 +170,44 @@ def test_empty_environment_key_disables_the_dotenv_key_and_is_flagged(
     assert settings.gemini_api_key is None
     assert settings.gemini_key_source is None
     assert settings.gemini_key_shadowed is True
+
+
+def test_subtitle_recognition_defaults_to_gemini_and_reads_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    defaults = load_settings(tmp_path)
+    assert (defaults.asr_backend, defaults.asr_model) == ("gemini", "gemini-3.8-flash")
+    (tmp_path / ".env").write_text("VCC_ASR_BACKEND=mlx\nVCC_GEMINI_ASR_MODEL=dotenv-asr\n")
+    dotenv = load_settings(tmp_path)
+    assert (dotenv.asr_backend, dotenv.asr_model) == ("mlx", "dotenv-asr")
+    monkeypatch.setenv("VCC_ASR_BACKEND", "gemini")
+    monkeypatch.setenv("VCC_GEMINI_ASR_MODEL", "env-asr")
+    environment = load_settings(tmp_path)
+    assert (environment.asr_backend, environment.asr_model) == ("gemini", "env-asr")
+
+
+@pytest.mark.parametrize("backend", ["whisper", "MLX", "gemini "])
+def test_unknown_subtitle_recognition_backend_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str
+) -> None:
+    monkeypatch.setenv("VCC_ASR_BACKEND", backend)
+    with pytest.raises(ConfigError, match="VCC_ASR_BACKEND"):
+        load_settings(tmp_path)
+
+
+@pytest.mark.parametrize("model", ["", "bad model", "-leading"])
+def test_invalid_subtitle_recognition_model_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setenv("VCC_GEMINI_ASR_MODEL", model)
+    with pytest.raises(ConfigError, match="identifiers"):
+        load_settings(tmp_path)
+
+
+def test_subtitle_recognition_model_must_not_carry_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-secret-key")
+    monkeypatch.setenv("VCC_GEMINI_ASR_MODEL", "model-fake-secret-key")
+    with pytest.raises(ConfigError, match="Credentials"):
+        load_settings(tmp_path)

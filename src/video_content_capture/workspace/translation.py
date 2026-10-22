@@ -48,20 +48,22 @@ def invalid_key(error: errors.APIError) -> bool:
     return "API_KEY_INVALID" in reasons or "API key not valid" in str(error.message or "")
 
 
-def provider_error(error: errors.APIError) -> str:
-    code = {
-        401: "translation_key_invalid",
-        403: "translation_permission_denied",
-        404: "translation_model_missing",
-        429: "translation_rate_limited",
+def provider_error(error: errors.APIError, prefix: str = "translation") -> str:
+    """The `<prefix>_*` job code for a Gemini HTTP failure, with any Retry-After hint."""
+    reason = {
+        401: "key_invalid",
+        403: "permission_denied",
+        404: "model_missing",
+        429: "rate_limited",
     }.get(
         error.code,
-        "translation_key_invalid"
+        "key_invalid"
         if invalid_key(error)
-        else "translation_provider_unavailable"
+        else "provider_unavailable"
         if error.code >= 500
-        else "translation_provider_request_failed",
+        else "provider_request_failed",
     )
+    code = f"{prefix}_{reason}"
     response = error.response
     if response is not None:
         retry = response.headers.get("Retry-After", "")

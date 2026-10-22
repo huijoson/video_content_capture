@@ -7,11 +7,15 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal, get_args
 
 from dotenv import dotenv_values
 from pydantic import SecretStr
 
 from video_content_capture.config import ConfigError
+
+ASRBackend = Literal["gemini", "mlx"]
+ASR_BACKENDS: tuple[ASRBackend, ...] = get_args(ASRBackend)
 
 
 @dataclass(frozen=True)
@@ -22,6 +26,8 @@ class WorkspaceSettings:
     port: int = 8765
     translation_model: str = "gemini-3.5-flash-lite"
     qa_model: str = "gemini-3.8-flash"
+    asr_backend: ASRBackend = "gemini"
+    asr_model: str = "gemini-3.8-flash"
     gemini_api_key: SecretStr | None = field(default=None, repr=False)
     # Where the key above was read from, and whether an environment variable won over a
     # different value in the project .env. `load_settings` stays a pure read; callers do
@@ -90,7 +96,11 @@ def load_settings(
         else value("VCC_GEMINI_TRANSLATION_MODEL", "gemini-3.5-flash-lite")
     )
     qa = qa_model if qa_model is not None else value("VCC_GEMINI_QA_MODEL", "gemini-3.8-flash")
-    for model in (translation, qa):
+    backend = value("VCC_ASR_BACKEND", "gemini")
+    if backend not in ASR_BACKENDS:
+        raise ConfigError("VCC_ASR_BACKEND must be gemini or mlx")
+    asr_model = value("VCC_GEMINI_ASR_MODEL", "gemini-3.8-flash")
+    for model in (translation, qa, asr_model):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}", model):
             raise ConfigError("Gemini model names must be nonempty identifiers")
     location = (
@@ -99,7 +109,7 @@ def load_settings(
         else Path(value("VCC_LIBRARY_DIR", "outputs/library"))
     )
     if raw_key and any(
-        raw_key in item for item in (str(location), translation, qa, effective_host)
+        raw_key in item for item in (str(location), translation, qa, asr_model, effective_host)
     ):
         raise ConfigError("Credentials must not be used in public settings")
     return WorkspaceSettings(
@@ -109,6 +119,8 @@ def load_settings(
         port=effective_port,
         translation_model=translation,
         qa_model=qa,
+        asr_backend=backend,
+        asr_model=asr_model,
         gemini_api_key=SecretStr(raw_key) if raw_key else None,
         gemini_key_source=key_source,
         gemini_key_shadowed=key_shadowed,

@@ -296,7 +296,7 @@ def test_an_exact_regional_track_still_wins_over_its_base_language(tmp_path: Pat
 
     class ASR:
         def transcribe(self, *args: object) -> object:
-            raise AssertionError("An exact regional track exists, so local recognition must not run")
+            raise AssertionError("An exact regional track exists, so recognition must not run")
 
     language, kind, parsed = acquire_subtitles(
         Adapter(), ASR(), source, tmp_path / "media", Event()
@@ -589,3 +589,102 @@ def test_a_drifting_tail_cue_is_clipped_and_named() -> None:
 
     with pytest.raises(ValueError, match="exceeds video duration"):
         parse_subtitles(b"WEBVTT\n\n00:00:01.000 --> 00:00:30.000\nfar past\n", "vtt", 10)
+
+
+def run_recognition(tmp_path: Path, failure: Exception) -> tuple[Library, str]:
+    """One acquisition job on media without platform subtitles, whose recognition raises."""
+    import hashlib
+    import sqlite3
+    from threading import Event
+    from uuid import uuid4
+
+    from video_content_capture.workspace.subtitles import AcquisitionService
+    from video_content_capture.workspace.youtube import SourceMetadata
+
+    library = Library(tmp_path / "library")
+    library.initialize()
+    source = SourceMetadata(
+        youtube_id="abcdefghijk",
+        source_url="https://youtube.com",
+        title="one",
+        duration=10,
+        formats=[],
+        audio_tracks=[],
+        subtitles=[],
+        default_format_id="v",
+        default_audio_id="a",
+        above_1080p=False,
+        original_language="en",
+    )
+    video_id = str(
+        library.import_video(
+            source.youtube_id, source.title, 10, source.source_url, source.model_dump_json()
+        )["id"]
+    )
+    media = library.video_dir(video_id) / "source" / "media.mp4"
+    media.write_bytes(b"media")
+    asset_id = uuid4().hex
+    with sqlite3.connect(library.db_path) as connection:
+        connection.execute(
+            "INSERT INTO media_assets VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                asset_id,
+                video_id,
+                "v",
+                "a",
+                str(media.relative_to(library.root)),
+                hashlib.sha256(b"media").hexdigest(),
+                "fp",
+                1,
+                "mp4",
+            ),
+        )
+
+    class Adapter:
+        def query(self, *args: object) -> SourceMetadata:
+            return source
+
+    class ASR:
+        def transcribe(self, *args: object) -> object:
+            raise failure
+
+    service = AcquisitionService(library, Adapter(), ASR())
+    job = service.create(video_id, asset_id)
+    service.run(job, library.start_job(str(job["id"])), Event())
+    return library, str(job["id"])
+
+
+def test_recognition_failure_code_reaches_the_job(tmp_path: Path) -> None:
+    from video_content_capture.workspace.youtube import SourceError
+
+    library, job_id = run_recognition(
+        tmp_path, SourceError("asr_rate_limited;retry_after=42s", "語音辨識服務失敗")
+    )
+    assert library.get_job(job_id)["error_code"] == "asr_rate_limited;retry_after=42s"
+
+
+def test_unexpected_failure_is_logged_by_type_only(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    library, job_id = run_recognition(tmp_path, RuntimeError("spoken words fake-secret"))
+    assert library.get_job(job_id)["error_code"] == "subtitle_acquisition_failed"
+    assert f"job={job_id} error=RuntimeError" in caplog.text
+    assert "fake-secret" not in caplog.text
+
+
+def test_mlx_without_apple_silicon_is_named(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from threading import Event
+
+    from video_content_capture.domain.errors import ConfigurationError
+    from video_content_capture.workspace.subtitles import MLXSubtitleAdapter
+    from video_content_capture.workspace.youtube import SourceError
+
+    def no_mlx() -> object:
+        raise ConfigurationError("MLX transcription requires an Apple Silicon Mac")
+
+    monkeypatch.setattr("video_content_capture.transcription.mlx._load_mlx_transcribe", no_mlx)
+    with pytest.raises(SourceError) as error:
+        MLXSubtitleAdapter().transcribe(tmp_path / "media", "en", 10, Event())
+    assert error.value.code == "asr_unavailable"
