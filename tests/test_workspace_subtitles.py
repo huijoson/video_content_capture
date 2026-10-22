@@ -201,7 +201,8 @@ def test_acquisition_priority(tracks: list[bool], expected: str, tmp_path: Path)
         formats=[],
         audio_tracks=[],
         subtitles=[
-            SubtitleTrack(language="en", automatic=auto, extensions=["vtt"]) for auto in tracks
+            SubtitleTrack(language="en-orig" if auto else "en", automatic=auto, extensions=["vtt"])
+            for auto in tracks
         ],
         default_format_id="v",
         default_audio_id="a",

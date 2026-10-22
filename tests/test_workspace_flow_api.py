@@ -53,8 +53,11 @@ class FlowAdapter(FakeAdapter):
     ) -> None:
         super().__init__()
         # yt-dlp reports the original as a region tag (`en-US`) while YouTube keys the track
-        # by base language (`en`), so the two are not always the same string.
+        # by base language (`en`), so the two are not always the same string. Its automatic
+        # recognition of the speech is keyed `en-orig`; a bare automatic `en` is a translation.
         key = track_language or language
+        if key is not None and automatic:
+            key += "-orig"
         self.source = parse_metadata(
             {
                 "id": "abcdefghijk",

@@ -88,6 +88,18 @@ def _primary_subtag(language: str) -> str:
     return language.split("-", maxsplit=1)[0].casefold()
 
 
+def original_track(tracks: Sequence[SubtitleTrack], language: str | None) -> SubtitleTrack | None:
+    """The platform track that carries the spoken language, or None when only recognition can.
+
+    YouTube's automatic `en` can be a machine translation of another language's captions
+    (`tlang`), which the platform answers with 429; only `en-orig` is the speech itself.
+    """
+    candidates = matching_tracks(tracks, language)
+    return next((track for track in candidates if not track.automatic), None) or next(
+        (track for track in candidates if track.language.endswith(ORIGINAL_SUFFIX)), None
+    )
+
+
 def matching_tracks(tracks: Sequence[SubtitleTrack], language: str | None) -> list[SubtitleTrack]:
     """The tracks that carry `language`, exact tag first and the primary subtag only as a fallback.
 
@@ -353,14 +365,7 @@ def acquire_subtitles(
                 "source_language_unknown",
                 "Original language unknown; choose a platform subtitle track",
             )
-        candidates = matching_tracks(refreshed.subtitles, language)
-        # YouTube's automatic `en` can be a machine translation of another language's captions
-        # (`tlang`), which the platform answers with 429; `en-orig` is the speech itself.
-        selected = (
-            next((item for item in candidates if not item.automatic), None)
-            or next((item for item in candidates if item.language.endswith(ORIGINAL_SUFFIX)), None)
-            or next(iter(candidates), None)
-        )
+        selected = original_track(refreshed.subtitles, language)
     if selected is not None:
         data = adapter.download_subtitle(refreshed, selected, cancel)
         return (

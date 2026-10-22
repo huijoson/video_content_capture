@@ -23,7 +23,7 @@ from video_content_capture.workspace.quality import (
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.subtitles import (
     AcquisitionService,
-    matching_tracks,
+    original_track,
     validate_language,
 )
 from video_content_capture.workspace.translation import TranslationService
@@ -249,13 +249,10 @@ class FlowService:
             return str(self.library.get_subtitle_version(selected)["source_type"])
         if self._platform_choice_required(source):
             return "platform_choice"
-        language = source.original_language
-        tracks = matching_tracks(source.subtitles, language)
-        if language is not None and any(not track.automatic for track in tracks):
-            return "platform_manual"
-        if tracks:
-            return "platform_auto"
-        return "asr"
+        track = original_track(source.subtitles, source.original_language)
+        if track is None:
+            return "asr"
+        return "platform_auto" if track.automatic else "platform_manual"
 
     @staticmethod
     def _platform_choice_required(source: SourceMetadata) -> bool:
