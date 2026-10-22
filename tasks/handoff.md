@@ -1,17 +1,24 @@
-# YouTube 工作區交接（2026-10-22）
+# YouTube 工作區交接（2026-10-22，PR #31 之後）
 
 ## 目前狀態
 
-- `main` 在 `ad9330d`（PR #28，已 squash 合併），工作樹乾淨，除了本交接檔與 `tasks/lessons.md`。
-- 檢查：`pytest` 800 passed、1 skipped；`ruff check`、`ruff format --check`、`mypy src` 通過。
-- 本 session 啟動的 `vcc serve`（127.0.0.1:8765，log 在 `/tmp/vcc-serve.log`）可能仍在背景跑，
-  程式碼與 `ad9330d` 相同。重啟前先 `pgrep -af "bin/vcc serve"` 取 PID 再 `kill`；
+- `main` 在 `95a8597`（PR #31）。PR #30、#31 都已 squash 合併，工作樹乾淨。
+- 檢查：`ruff check`、`ruff format --check`、`mypy src`、完整 `pytest` 都通過。
+- `vcc serve`（127.0.0.1:8765，log 在 `/tmp/vcc-serve.log`）已用 `95a8597` 重啟，在背景跑。
+  重啟前先 `pgrep -af "bin/vcc serve"` 取 PID 再 `kill`；
   不要用 `pkill -f "vcc serve"`，它會連發出指令的 shell 一起砍掉（exit 144）。
-- 影片庫 `outputs/library/` 有兩支影片：
-  - `f202fe31…`（美股 SPCX…，27:40）：字幕 `zh` 語音辨識＋`zh-TW` 譯文；舊流程停在匯出「已中斷」，
-    但已有一份 MKV 字幕軌成品。播放字幕仍是「未選擇」（字幕早於自動採用功能）。
-  - `a2358c1e…`（https://youtu.be/A63sedG-p5Q，28:41，英文）：`en` 平台自動字幕＋`zh-TW` 譯文，
-    燒錄匯出完成，使用者已確認成品正確。
+- 影片庫 `outputs/library/` 已遷移到 schema 8（遷移前備份為 `library.sqlite3.backup-77245d01…`）。
+  - `f202fe31…`（美股 SPCX…，27:40）：流程重試後匯出完成（720p 燒錄 MP4，1659.8 s）；
+    播放字幕由遷移補成 `zh-TW` 譯文，headless Chromium 確認播放器顯示 270 段字幕。
+  - `a2358c1e…`（https://youtu.be/A63sedG-p5Q）：燒錄匯出完成，使用者已確認成品正確。
+
+## PR #30、#31 做了什麼
+
+- #30 `subtitles.py` 的 `original_track` 是選原文字幕軌的唯一規則：人工軌，否則自動 `-orig` 軌，
+  都沒有就走語音辨識。流程確認畫面也用它。只有翻譯軌的影片不再 429 三次後顯示「來源暫時無法取得」。
+  以真實 adapter 對 A63sedG-p5Q 拿掉 `-orig` 軌重現：修改前 `source_busy`，修改後走語音辨識。
+- #31 schema 8 一次性遷移：`playback_version_id` 為空的影片補上最新完整譯文，沒有就補最新完整版本。
+  之後為空代表使用者關閉字幕或沒有字幕，沒有加「手動關閉」欄位。
 
 ## PR #28 做了什麼
 
@@ -35,15 +42,9 @@ https://github.com/huijoson/video_content_capture/pull/28
 - A63sedG-p5Q 以真實 adapter 取得 1796 段 `en · platform_auto`，末段 1709 s（片長 1721 s），未跑語音辨識；
   重試流程後字幕、翻譯、燒錄匯出全部完成。
 
-## 待做（依優先序）
+## 待做
 
-1. **只有翻譯軌、沒有 `-orig` 的影片**仍會 429 三次後顯示 `source_busy`「來源暫時無法取得」，
-   誤導使用者重試。候選做法：字幕下載的 429 不再當暫時性錯誤重試，改走 Gemini 語音辨識，
-   或回報專屬錯誤碼。`youtube.py` 的 `_HELPER` `reason()` 目前把 429 一律歸為 `temporary`。
-2. **既有影片的播放字幕**：自動採用只在新版本完成時觸發，`f202fe31…` 仍需手動按「用於播放」。
-   可考慮在開啟影片時，若 `playback_version_id` 為空且使用者從未手動關閉，就補選；
-   但目前 schema 無法區分「從未選」與「手動關閉」，需加欄位才做得乾淨。
-3. 舊影片 `f202fe31…` 的流程停在匯出「已中斷」，是否重試由使用者決定（會重新匯出）。
+- 交接時沒有已知待做項目。使用者手動指定翻譯軌（非 `-orig` 的自動軌）時仍會 429，屬已知限制。
 
 ## 環境注意
 
