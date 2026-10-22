@@ -25,7 +25,8 @@ SYSTEM_INSTRUCTION = (
     "字幕未提供的畫面、人物動作或圖表，回答『目前文字依據未提供』並列於缺乏依據。"
     "回覆分為 video_content（claim 與 cue_ids）、supplemental_knowledge、"
     "insufficient_evidence。補充知識須標示未經網路查證，不捏造外部來源或最新資訊。"
-    "只回傳指定 JSON schema，不提供或使用任何工具，不提供時間戳。"
+    "只回傳指定 JSON schema，不提供或使用任何工具。不要自行寫出時間戳：系統依 cue_ids "
+    "自動標示時間，使用者要求時間時照常引用片段即可，不列為缺乏依據。"
 )
 
 

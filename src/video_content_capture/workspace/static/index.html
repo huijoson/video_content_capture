@@ -25,7 +25,7 @@
         <button id="load-video" class="primary" type="submit">載入影片</button>
         <button id="cancel-query" type="button" hidden>取消查詢</button>
       </div>
-      <p id="import-help" class="hint">每次載入一支影片，查詢後只需選擇解析度；按開始處理才下載。</p>
+      <p id="import-help" class="hint">貼上網址即自動查詢；確認解析度後按開始處理才下載。</p>
     </form>
     <p id="gemini-help" class="notice"><span class="mark" data-mark="info" aria-hidden="true"></span>
       Gemini 未設定：翻譯與問答需要在專案根目錄 <code>.env</code> 設定
@@ -272,6 +272,11 @@
       <ol id="qa-messages" aria-label="問答訊息" tabindex="0"></ol>
       <form id="qa-form">
         <label for="question">問題</label>
+        <div id="qa-presets" class="button-row" aria-label="常用問題">
+          <button type="button" data-question="這支影片的重點是什麼？請條列並附引用。" disabled>重點摘要</button>
+          <button type="button" data-question="影片提出了哪些結論或建議？" disabled>結論與建議</button>
+          <button type="button" data-question="影片中有哪些需要先了解的名詞或概念？請逐一解釋。" disabled>名詞解釋</button>
+        </div>
         <textarea id="question" rows="3" disabled aria-describedby="qa-help"></textarea>
         <div class="qa-action">
           <button id="qa-submit" class="primary" type="submit" disabled>送出問題</button>

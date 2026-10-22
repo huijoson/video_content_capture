@@ -25,6 +25,27 @@ def test_import_versions_are_immutable_and_selections_independent(tmp_path: Path
     assert library.subtitle_cues(str(first["id"]))[0].text == "Hello"
 
 
+def test_new_subtitles_fill_playback_and_translations_take_it_over(tmp_path: Path) -> None:
+    library = Library(tmp_path)
+    library.initialize()
+    video_id = str(
+        library.import_video("abcdefghijk", "影片", 10, "https://youtube.com", "{}")["id"]
+    )
+    cues = parse_subtitles(b"1\n00:00:01,000 --> 00:00:02,000\nHello\n", "srt", 10).cues
+    original = library.create_subtitle_version(video_id, "en", "original", "import", cues)
+    assert library.get_video(video_id)["playback_version_id"] == original["id"]
+    library.create_subtitle_version(video_id, "en", "another", "import", cues)
+    assert library.get_video(video_id)["playback_version_id"] == original["id"]
+    pending = library.create_subtitle_version(
+        video_id, "zh-TW", "譯文", "translation", [], parent_id=str(original["id"]), complete=False
+    )
+    assert library.get_video(video_id)["playback_version_id"] == original["id"]
+    with library._connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        library.complete_subtitle_version(connection, str(pending["id"]), cues)
+    assert library.get_video(video_id)["playback_version_id"] == pending["id"]
+
+
 def test_subtitle_parse_clips_and_removes_script() -> None:
     parsed = parse_subtitles(
         b"\xef\xbb\xbfWEBVTT\n\n00:01.000 --> 00:10.500\n<b>Hello</b><script>x()</script>\n",
