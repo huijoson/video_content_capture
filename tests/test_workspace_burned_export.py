@@ -53,7 +53,7 @@ class FakeFFmpeg:
 
     def __init__(self, audio_codec: str = "aac") -> None:
         self.audio_codec = audio_codec
-        self.hardware = True
+        self.encoders = {"h264_videotoolbox"}
         self.calls: list[list[str]] = []
         self.subtitles: list[str] = []
         self.block = False
@@ -76,9 +76,9 @@ class FakeFFmpeg:
                     "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2", "duration": "10.0"},
                 }
             )
+        if args[args.index("-c:v") + 1] not in self.encoders:
+            raise SourceError("source_unavailable", "Unknown encoder")
         if "lavfi" in args:
-            if not self.hardware:
-                raise SourceError("source_unavailable", "no VideoToolbox")
             return ""
         output = Path(args[-1])
         self.subtitles.append((output.parent / "burned.ass").read_text(encoding="utf-8"))
@@ -141,7 +141,7 @@ def test_burned_export_publishes_new_mp4_artifact_with_subtitle_form(tmp_path: P
         assert snapshot["subtitle_form"] == "burned"
         assert snapshot["container"] == "mp4"
         assert [track["version_id"] for track in snapshot["tracks"]] == [target["id"]]
-        # The confirmation step already proved VideoToolbox with a short trial encode.
+        # The confirmation step already proved a hardware encoder with a short trial encode.
         assert any("-t" in args and "-progress" in args for args in runner.calls)
         artifacts = []
         for _ in range(2):
@@ -214,6 +214,23 @@ def test_burned_progress_reports_processed_duration_and_cancel_stops_ffmpeg(
         assert client.get(f"/api/videos/{video_id}").json()["exports"] == []
 
 
+def test_burned_export_encodes_with_nvenc_when_videotoolbox_is_missing(tmp_path: Path) -> None:
+    runner = FakeFFmpeg()
+    runner.encoders = {"h264_nvenc"}
+    client, library, video_id, _, target = make_client(tmp_path, runner)
+    with client:
+        snapshot = preview(client, video_id, target, subtitle_form="burned").json()
+        job = client.post(
+            f"/api/videos/{video_id}/exports", json={"snapshot": snapshot}, headers=ORIGIN
+        ).json()
+        assert wait_job(client, job["id"])["status"] == "completed"
+        assert len(client.get(f"/api/videos/{video_id}").json()["exports"]) == 1
+    burn = runner.burns()[0]
+    assert burn[burn.index("-c:v") + 1] == "h264_nvenc"
+    assert burn[burn.index("-profile:v") + 1] == "high"
+    assert not any("libx264" in args for args in runner.calls)
+
+
 def test_hardware_encoder_unavailable_fails_explicitly_without_software_fallback(
     tmp_path: Path,
 ) -> None:
@@ -221,10 +238,10 @@ def test_hardware_encoder_unavailable_fails_explicitly_without_software_fallback
     client, library, video_id, _, target = make_client(tmp_path, runner)
     with client:
         snapshot = preview(client, video_id, target, subtitle_form="burned").json()
-        runner.hardware = False
+        runner.encoders = set()
         refused = preview(client, video_id, target, subtitle_form="burned")
         assert refused.status_code == 409
-        assert "VideoToolbox" in refused.json()["detail"]
+        assert "NVENC" in refused.json()["detail"]
         # A confirmed job whose hardware disappears fails with an explicit code.
         job = library.create_snapshot_job(video_id, "export", snapshot)
         from video_content_capture.workspace.exports import ExportService
@@ -579,11 +596,11 @@ def test_long_lines_wrap_within_frame_and_text_cannot_inject_tags() -> None:
     assert dialogue.endswith("\\{＼b1\\}bold＼Nnot\\Nnext")
 
 
-def _vt_available() -> bool:
+def _hardware_available() -> bool:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         return False
     try:
-        MediaExporter().require_hardware(Event())
+        MediaExporter().hardware_encoder(Event())
     except SourceError:
         return False
     return True
@@ -638,7 +655,9 @@ def _ink_columns(mask: bytearray, width: int, rows: range) -> range:
     return range(columns[0], columns[-1] + 1)
 
 
-@pytest.mark.skipif(not _vt_available(), reason="ffmpeg with VideoToolbox H.264 is unavailable")
+@pytest.mark.skipif(
+    not _hardware_available(), reason="ffmpeg with a hardware H.264 encoder is unavailable"
+)
 @pytest.mark.parametrize(
     ("container", "audio", "audio_args"),
     [("mp4", "aac", ["-c:a", "aac"]), ("mkv", "opus", ["-c:a", "libopus"])],
@@ -728,7 +747,9 @@ def _bands_at(
     return _bands(mask, width, height, max_gap)
 
 
-@pytest.mark.skipif(not _vt_available(), reason="ffmpeg with VideoToolbox H.264 is unavailable")
+@pytest.mark.skipif(
+    not _hardware_available(), reason="ffmpeg with a hardware H.264 encoder is unavailable"
+)
 def test_bilingual_burn_real_ffmpeg_stacks_target_above_smaller_original(tmp_path: Path) -> None:
     width, height = 640, 360
     target = ExportTrack(
@@ -789,7 +810,9 @@ def test_bilingual_burn_real_ffmpeg_stacks_target_above_smaller_original(tmp_pat
     assert _bands_at(both_source, both_burn, 0.5, width, height) == []
 
 
-@pytest.mark.skipif(not _vt_available(), reason="ffmpeg with VideoToolbox H.264 is unavailable")
+@pytest.mark.skipif(
+    not _hardware_available(), reason="ffmpeg with a hardware H.264 encoder is unavailable"
+)
 @pytest.mark.parametrize(("width", "height"), [(640, 360), (1920, 1080)])
 def test_bilingual_burn_real_ffmpeg_keeps_wrapped_original_below_target(
     tmp_path: Path, width: int, height: int
@@ -857,7 +880,9 @@ def test_bilingual_burn_real_ffmpeg_keeps_wrapped_original_below_target(
     assert _bands_at(both_source, both_burn, 0.5, width, height) == []
 
 
-@pytest.mark.skipif(not _vt_available(), reason="ffmpeg with VideoToolbox H.264 is unavailable")
+@pytest.mark.skipif(
+    not _hardware_available(), reason="ffmpeg with a hardware H.264 encoder is unavailable"
+)
 def test_bilingual_burn_real_ffmpeg_keeps_target_visible_past_the_margin_cap(
     tmp_path: Path,
 ) -> None:
