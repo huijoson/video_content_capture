@@ -24,7 +24,7 @@ from uuid import uuid4
 from video_content_capture.redaction import scrub_text
 from video_content_capture.workspace.subtitles import Cue, validate_cues, validate_language
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 # One-click flow stages reuse the existing job kinds, in this fixed order.
 FLOW_STAGES = ("download", "subtitles", "translation", "export")
 FLOW_ENDED = ("completed", "failed", "cancelled", "interrupted")
@@ -217,6 +217,15 @@ class Library:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
             if "flow_id" not in columns:
                 connection.execute("ALTER TABLE jobs ADD COLUMN flow_id TEXT REFERENCES flows(id)")
+        if version < 8:
+            # Subtitles that finished before adoption existed left the playback slot empty
+            # without anyone choosing that. Fill it once as adoption would have.
+            connection.execute(
+                "UPDATE videos SET playback_version_id=(SELECT id FROM subtitle_versions "
+                "WHERE video_id=videos.id AND complete=1 "
+                "ORDER BY source_type='translation' DESC, created_at DESC, rowid DESC LIMIT 1) "
+                "WHERE playback_version_id IS NULL"
+            )
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @staticmethod
