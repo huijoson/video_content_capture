@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from video_content_capture.workspace.storage import SCHEMA_VERSION, Library
+from video_content_capture.workspace.subtitles import Cue
 
 
 def test_library_survives_reopen_and_interrupts_running(tmp_path: Path) -> None:
@@ -339,3 +340,41 @@ def test_latest_flow_returns_the_newest_flow_in_any_status(tmp_path: Path) -> No
 
     with pytest.raises(ValueError):
         library.latest_flow("0123456789abcdef")
+
+
+def test_upgrade_shows_existing_subtitles_on_videos_with_no_playback(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library")
+    library.initialize()
+    cues = [Cue(id="1", start=1, end=2, text="Hello")]
+
+    def video(youtube_id: str) -> str:
+        return str(library.import_video(youtube_id, "old", 10, "url", "{}")["id"])
+
+    translated, unfinished, original_only, chosen = (
+        video(f"{letter}bcdefghijk") for letter in "abcd"
+    )
+    asr = library.create_subtitle_version(translated, "zh", "asr", "asr", cues)
+    translation = library.create_subtitle_version(
+        translated, "zh-TW", "譯文", "translation", cues, parent_id=str(asr["id"])
+    )
+    library.create_subtitle_version(
+        translated, "en", "pending", "translation", [], parent_id=str(asr["id"]), complete=False
+    )
+    library.create_subtitle_version(unfinished, "zh", "pending", "asr", [], complete=False)
+    imported = library.create_subtitle_version(original_only, "en", "import", "import", cues)
+    kept = library.create_subtitle_version(chosen, "zh", "asr", "asr", cues)
+    library.create_subtitle_version(
+        chosen, "zh-TW", "譯文", "translation", cues, parent_id=str(kept["id"])
+    )
+    with sqlite3.connect(library.db_path) as connection:
+        connection.execute("UPDATE videos SET playback_version_id=NULL WHERE id!=?", (chosen,))
+        connection.execute(
+            "UPDATE videos SET playback_version_id=? WHERE id=?", (str(kept["id"]), chosen)
+        )
+        connection.execute("PRAGMA user_version = 7")
+    upgraded = Library(library.root)
+    upgraded.initialize()
+    assert upgraded.get_video(translated)["playback_version_id"] == translation["id"]
+    assert upgraded.get_video(unfinished)["playback_version_id"] is None
+    assert upgraded.get_video(original_only)["playback_version_id"] == imported["id"]
+    assert upgraded.get_video(chosen)["playback_version_id"] == kept["id"]
