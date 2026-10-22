@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 
 from video_content_capture.redaction import scrub_text
 from video_content_capture.workspace.youtube import (
+    ORIGINAL_SUFFIX,
     SourceError,
     SourceMetadata,
     SubtitleTrack,
@@ -81,22 +82,15 @@ def validate_language(language: str) -> str:
     return language
 
 
-ORIGINAL_SUFFIX = "-orig"
-
-
 def _primary_subtag(language: str) -> str:
     return language.split("-", maxsplit=1)[0].casefold()
 
 
 def original_track(tracks: Sequence[SubtitleTrack], language: str | None) -> SubtitleTrack | None:
-    """The platform track that carries the spoken language, or None when only recognition can.
-
-    YouTube's automatic `en` can be a machine translation of another language's captions
-    (`tlang`), which the platform answers with 429; only `en-orig` is the speech itself.
-    """
+    """The platform track that carries the spoken language, or None when only recognition can."""
     candidates = matching_tracks(tracks, language)
     return next((track for track in candidates if not track.automatic), None) or next(
-        (track for track in candidates if track.language.endswith(ORIGINAL_SUFFIX)), None
+        iter(candidates), None
     )
 
 

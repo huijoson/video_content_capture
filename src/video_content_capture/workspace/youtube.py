@@ -14,7 +14,7 @@ from threading import Event
 from typing import Protocol
 from urllib.parse import parse_qs, urlsplit
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from video_content_capture.redaction import scrub_text
 
@@ -49,6 +49,11 @@ class AudioTrack(BaseModel):
     size: int | None = None
 
 
+# YouTube keys its automatic recognition of the spoken language `<lang>-orig`; every other
+# automatic track is a machine translation (`tlang`), which it answers with 429.
+ORIGINAL_SUFFIX = "-orig"
+
+
 class SubtitleTrack(BaseModel):
     model_config = ConfigDict(frozen=True)
     language: str
@@ -69,6 +74,16 @@ class SourceMetadata(BaseModel):
     default_audio_id: str
     above_1080p: bool
     original_language: str | None
+
+    @field_validator("subtitles")
+    @classmethod
+    def _downloadable(cls, tracks: list[SubtitleTrack]) -> list[SubtitleTrack]:
+        # Also drops the translations that metadata stored before this rule still lists.
+        return [
+            track
+            for track in tracks
+            if not track.automatic or track.language.endswith(ORIGINAL_SUFFIX)
+        ]
 
 
 class DownloadedMedia(BaseModel):

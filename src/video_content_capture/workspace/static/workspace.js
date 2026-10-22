@@ -127,7 +127,7 @@ function flowLanguageChoices(video) {
   const metadata = video.metadata || {};
   const provided = [
     ...(video.subtitles || []).map((version) => version.language),
-    ...(metadata.subtitles || []).map((track) => track.language),
+    ...(metadata.subtitles || []).map((track) => track.language.replace(/-orig$/, "")),
     metadata.original_language,
   ].filter(Boolean);
   return [...new Set([...flowTargetLanguages, ...provided])].map((id) => ({
