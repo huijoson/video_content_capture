@@ -1,81 +1,74 @@
-# YouTube 工作區交接（2026-10-04）
+# YouTube 工作區交接（2026-10-22）
 
 ## 目前狀態
 
-- 分支 `feat/youtube-workspace`；**全部變更尚未 commit**（等使用者決定）。
-- 規格 `docs/design/youtube-workspace-v1.md`（Q18＝A 已確認）的實作切片 S1–S5 全部完成，
-  每片都由主 agent 重跑檢查並審查；逐片驗證紀錄見 `tasks/todo.md`「Implementation plan」。
-- 最終檢查（2026-10-04）：`ruff check`、`ruff format --check`、`mypy src` 通過；
-  `pytest` 627 passed、1 skipped（另有 Starlette TestClient 的 httpx 棄用警告，與本次無關）。
-- 視覺方向已由使用者選定：**簡潔中性**（淺色、系統字體、清楚分欄與表單），記於 `PRODUCT.md`。
+- `main` 在 `ad9330d`（PR #28，已 squash 合併），工作樹乾淨，除了本交接檔與 `tasks/lessons.md`。
+- 檢查：`pytest` 800 passed、1 skipped；`ruff check`、`ruff format --check`、`mypy src` 通過。
+- 本 session 啟動的 `vcc serve`（127.0.0.1:8765，log 在 `/tmp/vcc-serve.log`）可能仍在背景跑，
+  程式碼與 `ad9330d` 相同。重啟前先 `pgrep -af "bin/vcc serve"` 取 PID 再 `kill`；
+  不要用 `pkill -f "vcc serve"`，它會連發出指令的 shell 一起砍掉（exit 144）。
+- 影片庫 `outputs/library/` 有兩支影片：
+  - `f202fe31…`（美股 SPCX…，27:40）：字幕 `zh` 語音辨識＋`zh-TW` 譯文；舊流程停在匯出「已中斷」，
+    但已有一份 MKV 字幕軌成品。播放字幕仍是「未選擇」（字幕早於自動採用功能）。
+  - `a2358c1e…`（https://youtu.be/A63sedG-p5Q，28:41，英文）：`en` 平台自動字幕＋`zh-TW` 譯文，
+    燒錄匯出完成，使用者已確認成品正確。
 
-## 待做工作
+## PR #28 做了什麼
 
-### 1. 真實環境驗收（需要使用者，`tasks/todo.md` 最後一個未勾項目）
+https://github.com/huijoson/video_content_capture/pull/28
 
-使用者須提供／操作：
+1. **原文字幕選軌修正**（`workspace/subtitles.py` 的 `acquire_subtitles`）。YouTube 的自動 `en`
+   可能是其他語言機器翻譯（該片 `tlang=en&lang=ar`），平台每次回 429；`en-orig` 才是英文語音。
+   選軌順序改為人工 → 自動 `-orig` → 其他；版本語系去掉 `-orig` 尾綴。
+2. **省操作步驟**：
+   - 貼上網址自動查詢（`workspace.js` 的 `youtube-url` input 事件；只查詢不下載）。
+   - 第一份完成的字幕自動成為播放字幕，翻譯完成後改用譯文
+     （`storage.py` 的 `_adopt_for_playback`，在完成版本的同一交易內執行）。
+   - 問答區三顆常用問題按鈕 `#qa-presets`，按一下即送出。
+3. **問答提示詞**（`qa.py` 的 `SYSTEM_INSTRUCTION`）：說明時間由系統依 `cue_ids` 標示，
+   使用者要求時間時不再列入「缺乏依據」。只實測一次，屬推論有效。
 
-- [ ] 專案根目錄 `.env` 設定 `GEMINI_API_KEY`（agent 不得讀取或輸出金鑰值）。
-- [ ] 確認帳戶可用的模型：翻譯 `gemini-3.5-flash-lite`、問答 `gemini-3.8-flash`
-      （候選預設，未實測權限與品質；查證依據 `docs/design/gemini-api-notes.md`）。
-- [ ] 一支允許測試的 YouTube 影片（無須登入、非直播）。
-- [ ] `uv run vcc serve` 後走完核心流程：載入 → 選畫質／音軌 → 下載 → 播放 → 取得原文字幕 →
-      翻譯 → 匯出（MP4／MKV）→ 問答與引用跳播 → 清除預覽 → 刪除整支影片。
-- [ ] Chrome 與 Safari 實播、引用跳播、200% 放大、窄視窗「字幕／問答」分頁。
-- [ ] VLC 開啟匯出成品，確認字幕軌可切換／關閉，並對照第 5 節匯出矩陣（附加原文開／關）。
-- [ ] 螢幕閱讀器（VoiceOver）聽一次 aria-live 進度與聊天宣告。
-- [ ] Gemini 回答品質以人工樣本核對語義忠實（AC07 要求，mock 不能代替）。
-- [ ] 驗收結果寫回 `tasks/todo.md`；失敗項目開成修正任務。
+## 已驗證（本 session 實測）
 
-### 2. Commit 決定
+- 問答：送出問題約 20 秒得到驗證通過的回覆；引用「跳至 00:00:10」讓播放器到 10.46 s。
+- 貼上網址自動載入、「重點摘要」按鈕送出並回五個有引用的重點（headless Chromium）。
+- A63sedG-p5Q 以真實 adapter 取得 1796 段 `en · platform_auto`，末段 1709 s（片長 1721 s），未跑語音辨識；
+  重試流程後字幕、翻譯、燒錄匯出全部完成。
 
-- 使用者尚未要求 commit。詢問要現在 commit 還是驗收後再 commit。
-- **不要** add／修改／刪除 untracked 的 `package-lock.json`（使用者既有檔案）。
-- `docs/code-review.md` 缺結尾換行是既有問題（1bf3d20），不在本次範圍。
+## 待做（依優先序）
 
-### 3. 需要使用者確認的實作細節（規格未定義，由實作者自選）
+1. **只有翻譯軌、沒有 `-orig` 的影片**仍會 429 三次後顯示 `source_busy`「來源暫時無法取得」，
+   誤導使用者重試。候選做法：字幕下載的 429 不再當暫時性錯誤重試，改走 Gemini 語音辨識，
+   或回報專屬錯誤碼。`youtube.py` 的 `_HELPER` `reason()` 目前把 429 一律歸為 `temporary`。
+2. **既有影片的播放字幕**：自動採用只在新版本完成時觸發，`f202fe31…` 仍需手動按「用於播放」。
+   可考慮在開啟影片時，若 `playback_version_id` 為空且使用者從未手動關閉，就補選；
+   但目前 schema 無法區分「從未選」與「手動關閉」，需加欄位才做得乾淨。
+3. 舊影片 `f202fe31…` 的流程停在匯出「已中斷」，是否重試由使用者決定（會重新匯出）。
 
-| 項目 | 目前做法 |
-| --- | --- |
-| 工作並行 | 下載、字幕、翻譯、匯出、預覽共用一條串行 lane；問答獨立 lane（主 agent 依規格「原文就緒即可問答」修正） |
-| 翻譯分塊 | 每塊 100 cues、預檢上限 900,000 tokens、單次 120 秒 timeout |
-| 問答輸入上限 | 常數表：`gemini-3.8-flash` 1,048,576；未知模型 200,000；預算＝min(200,000, 上限−8,192−4,096)；未呼叫 models.get |
-| 重複送出問題 | 回 409，不回傳既有 pending 訊息 |
-| 手動匯入字幕 | 不自動開對話，須按「設為問答依據」 |
-| 原語系未知 | 要求使用者從平台字幕選單手動選軌 |
-| 預覽編碼 | libx264 veryfast、crf 23、yuv420p、AAC 128k 雙聲道、faststart；空間估算＝來源×2＋64 MiB |
-| 刪除整支影片 | 確認碼＝範圍計數 sha256；等媒體 lane 停下最多 10 秒，逾時回 409 並列入「待清理」；待清理期間同 YouTube ID 不能重新匯入 |
-| 容器選擇 | H.264／AAC 用 MP4，其餘保守用 MKV；MP4 失敗須使用者確認改 MKV |
-| 「取消查詢」 | 只停止瀏覽器端等待；伺服器已完成的查詢仍會出現在影片庫 |
+## 環境注意
 
-## 程式位置速查
-
-- 後端：`src/video_content_capture/workspace/`
-  - `config.py`（.env／優先序）、`security.py`（Host／Origin／CSP／redaction）
-  - `storage.py`（SQLite schema v5、共同發佈 gate `publish_attempt`、刪除流程）
-  - `jobs.py`（`MediaQueue`、`JobLanes`）、`youtube.py`（yt-dlp adapter）
-  - `subtitles.py`、`translation.py`、`exports.py`、`previews.py`、`qa.py`、`qa_jobs.py`、`app.py`
-- 前端：`workspace/static/`（`index.html`、`workspace.css` 的 `:root` token、`workspace.js`、
-  `dialog.js`、`narrow-tabs.js`；`workspace.js` 依測試規定不得呼叫 `.focus(`）
-- CLI 入口：`vcc serve`（`src/video_content_capture/cli.py`）
-- 測試：`tests/test_workspace_*.py`（全部離線，fake yt-dlp／Gemini；小型真實 ffmpeg 合成媒體）
+- shell 環境有 `GEMINI_API_KEY`（非空），會蓋過 `.env`；`serve` 啟動時會印警告。目前該金鑰可用。
+  若使用者要改用 `.env` 的金鑰，先 `unset GEMINI_API_KEY` 再重啟服務。
+- 本機無 JS runtime（deno），yt-dlp 會警告部分格式可能缺失；也沒有 `curl_cffi`（impersonation）。
+  目前下載與字幕都能用，僅記錄供 429／缺格式時排查。
+- 瀏覽器測試：`~/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome` 搭配
+  `playwright-core`（本 session 裝在 `/tmp/vccui`，可能已被清除，`npm i playwright-core` 即可）。
+- PR 慣例：Conventional Commit 標題、squash 合併；repo 沒有跑測試的 CI，只有 GitGuardian，
+  合併前必須在本機跑完整檢查。
 
 ## 驗證命令
 
 ```sh
 uv run ruff check . && uv run ruff format --check . && uv run mypy src \
-  && env -u GEMINI_API_KEY -u GOOGLE_API_KEY uv run pytest
+  && env -u GEMINI_API_KEY -u GOOGLE_API_KEY uv run pytest -p no:warnings
 ```
 
-- pyproject 的 addopts 已含 `-q`，再加 `-q` 會隱藏摘要行。
-- 使用者的 shell 環境已設有 Gemini 金鑰環境變數（空目錄啟動仍顯示「已設定」）；跑測試與
-  smoke test 時用 `env -u GEMINI_API_KEY -u GOOGLE_API_KEY` 避免任何付費呼叫。
+pyproject 的 addopts 已含 `-q`；要看摘要行用 `uv run pytest -p no:warnings | grep passed`。
 
-## 工作方式（使用者偏好）
+## 程式位置速查
 
-- 實作優先交給 `codex exec --dangerously-bypass-approvals-and-sandbox -m gpt-6.1-sol
-  -c model_reasoning_effort=medium`，額度用完才改用 Claude 子代理；主 agent 負責寫任務說明、
-  審查 diff、重跑檢查與 smoke test。
-- 各切片任務說明（common.md、s1–s5.md）放在上一個 session 的暫存目錄，可能已不存在；
-  需要時依本文件與 `tasks/todo.md` 重寫。
-- 不得建立含真實金鑰的 `.env`、讀取或輸出金鑰；測試不得下載真實影片或呼叫付費 API。
+- 後端 `src/video_content_capture/workspace/`：`app.py`（路由）、`storage.py`（SQLite、選擇指標、
+  `publish_attempt`）、`flows.py`（一鍵流程）、`subtitles.py`（選軌、解析）、`youtube.py`（yt-dlp
+  隔離子程序與錯誤分類）、`asr.py`（Gemini／MLX 辨識）、`translation.py`、`qa.py`、`exports.py`、`burned.py`。
+- 前端 `workspace/static/`：`index.html`、`workspace.js`、`workspace.css`。
+- 名詞與決策：`CONTEXT.md`、`docs/adr/`。

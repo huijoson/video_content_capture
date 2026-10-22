@@ -284,3 +284,14 @@
   log provider failures (redacted), and make one minimal live call before declaring a provider
   integration done.
 - Tripwire: `test_developer_api_config_has_no_additional_properties` in translation and Q&A tests.
+
+## 2026-10-22 — A "temporary" 429 that no retry could fix
+
+- Classification: wrong premise.
+- Failure mode: the flow picked YouTube's automatic `en` caption, which was a machine translation
+  (`tlang=en&lang=ar`) that YouTube refuses with 429 every time. The 429 was classified as
+  transient, retried three times and shown as 「來源暫時無法取得，請稍後重試」.
+- Detection signal: raw yt-dlp gave 429 on `en` repeatedly while `en-orig` downloaded immediately.
+- Prevention rule: when a "temporary" source error recurs, reproduce with raw yt-dlp and compare
+  sibling tracks or formats before trusting the retry label; prefer `-orig` automatic captions.
+- Tripwire: `test_the_original_automatic_track_wins_over_a_translated_one`.
