@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from threading import Event
 
@@ -68,6 +69,39 @@ def test_quality_and_unknown_audio() -> None:
     assert result.original_language is None
     assert result.audio_tracks[0].language == "未知"
     assert not result.audio_tracks[0].original
+
+
+def test_only_downloadable_subtitle_tracks_are_offered() -> None:
+    """YouTube answers every automatic translation (`tlang`) with 429, even one made from the
+    spoken language; only its recognition of the speech, keyed `-orig`, downloads."""
+    data = info()
+    data["subtitles"] = {"fr": [{"ext": "vtt"}]}
+    data["automatic_captions"] = {
+        "en": [{"ext": "vtt"}],
+        "en-orig": [{"ext": "vtt"}],
+        "ja": [{"ext": "vtt"}],
+    }
+    result = parse_metadata(data, f"https://youtu.be/{ID}")
+    assert [(track.language, track.automatic) for track in result.subtitles] == [
+        ("fr", False),
+        ("en-orig", True),
+    ]
+
+
+def test_metadata_stored_before_the_rule_no_longer_offers_translations() -> None:
+    from video_content_capture.workspace.youtube import SourceMetadata
+
+    stored = parse_metadata(info(), f"https://youtu.be/{ID}").model_dump(mode="json")
+    stored["subtitles"] = [
+        {"language": "en", "automatic": True, "extensions": ["vtt"]},
+        {"language": "en-orig", "automatic": True, "extensions": ["vtt"]},
+        {"language": "en", "automatic": False, "extensions": ["vtt"]},
+    ]
+    source = SourceMetadata.model_validate_json(json.dumps(stored))
+    assert [(track.language, track.automatic) for track in source.subtitles] == [
+        ("en-orig", True),
+        ("en", False),
+    ]
 
 
 def test_all_above_1080_and_downloader_tie_order() -> None:
