@@ -201,7 +201,8 @@ def test_acquisition_priority(tracks: list[bool], expected: str, tmp_path: Path)
         formats=[],
         audio_tracks=[],
         subtitles=[
-            SubtitleTrack(language="en", automatic=auto, extensions=["vtt"]) for auto in tracks
+            SubtitleTrack(language="en-orig" if auto else "en", automatic=auto, extensions=["vtt"])
+            for auto in tracks
         ],
         default_format_id="v",
         default_audio_id="a",
@@ -323,6 +324,46 @@ def test_the_original_automatic_track_wins_over_a_translated_one(tmp_path: Path)
     language, kind, _ = acquire_subtitles(Adapter(), ASR(), source, tmp_path / "media", Event())
     assert requested == ["en-orig"]
     assert (language, kind) == ("en", "platform_auto")
+
+
+def test_a_translated_automatic_track_alone_goes_to_local_recognition(tmp_path: Path) -> None:
+    """Without `-orig`, YouTube has no recognition in the spoken language: its automatic `en` is
+    a machine translation that it rejects with 429, so the speech itself is recognised."""
+    from threading import Event
+
+    from video_content_capture.workspace.subtitles import Cue, acquire_subtitles
+    from video_content_capture.workspace.youtube import SourceMetadata, SubtitleTrack
+
+    source = SourceMetadata(
+        youtube_id="abcdefghijk",
+        source_url="https://youtube.com",
+        title="one",
+        duration=10,
+        formats=[],
+        audio_tracks=[],
+        subtitles=[
+            SubtitleTrack(language="en", automatic=True, extensions=["vtt"]),
+            SubtitleTrack(language="ar-orig", automatic=True, extensions=["vtt"]),
+        ],
+        default_format_id="v",
+        default_audio_id="a",
+        above_1080p=False,
+        original_language="en-US",
+    )
+
+    class Adapter:
+        def query(self, *args: object) -> SourceMetadata:
+            return source
+
+        def download_subtitle(self, *args: object) -> bytes:
+            raise AssertionError("A translated track must not be downloaded as the original")
+
+    class ASR:
+        def transcribe(self, *args: object) -> tuple[str, list[Cue]]:
+            return "en", [Cue(id="one", start=1, end=2, text="hello")]
+
+    language, kind, _ = acquire_subtitles(Adapter(), ASR(), source, tmp_path / "media", Event())
+    assert (language, kind) == ("en", "asr")
 
 
 def test_an_exact_regional_track_still_wins_over_its_base_language(tmp_path: Path) -> None:
