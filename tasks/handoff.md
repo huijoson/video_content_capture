@@ -44,7 +44,7 @@ https://github.com/huijoson/video_content_capture/pull/28
 
 ## 待做
 
-- 交接時沒有已知待做項目。使用者手動指定翻譯軌（非 `-orig` 的自動軌）時仍會 429，屬已知限制。
+- 交接時沒有已知待做項目。YouTube 的自動翻譯軌（`tlang`）一律回 429，`SourceMetadata` 只保留人工軌與 `-orig` 軌，介面不再列出翻譯軌。
 
 ## 環境注意
 
