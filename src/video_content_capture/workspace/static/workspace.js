@@ -970,6 +970,11 @@ element("import-form").addEventListener("submit", async (event) => {
   }
 });
 element("cancel-query").addEventListener("click", () => queryController?.abort());
+element("youtube-url").addEventListener("input", (event) => {
+  if (event.inputType === "insertFromPaste" && element("youtube-url").checkValidity()) {
+    element("import-form").requestSubmit();
+  }
+});
 element("library-search").addEventListener("input", renderLibrary);
 element("make-preview").addEventListener("click", async () => {
   const video = currentVideo;
@@ -1341,6 +1346,9 @@ function updateQaControls() {
   const pending = currentConversation?.messages?.some((message) => message.status === "pending");
   element("question").disabled = !geminiConfigured || !source;
   element("qa-submit").disabled = !geminiConfigured || !source || pending || qaSubmitting || !element("question").value.trim();
+  for (const preset of element("qa-presets").querySelectorAll("button")) {
+    preset.disabled = !geminiConfigured || !source || pending || qaSubmitting;
+  }
   element("qa-delete-conversation").disabled = !currentConversation;
   element("qa-no-source").hidden = source;
 }
@@ -1588,6 +1596,13 @@ element("question").addEventListener("keydown", (event) => {
     if (!element("qa-submit").disabled) element("qa-form").requestSubmit();
   }
 });
+for (const preset of element("qa-presets").querySelectorAll("button")) {
+  preset.addEventListener("click", () => {
+    element("question").value = preset.dataset.question;
+    updateQaControls();
+    element("qa-form").requestSubmit();
+  });
+}
 element("qa-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const videoId = currentVideo?.id;

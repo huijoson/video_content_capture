@@ -731,6 +731,8 @@ class Library:
             "UPDATE subtitle_versions SET content_hash=?,complete=? WHERE id=?",
             (content_hash, int(complete), version_id),
         )
+        if complete:
+            self._adopt_for_playback(connection, video_id, version_id, source_type)
         return self._record(
             connection.execute("SELECT * FROM subtitle_versions WHERE id=?", (version_id,))
         )
@@ -755,6 +757,20 @@ class Library:
         connection.execute(
             "UPDATE subtitle_versions SET content_hash=?,complete=1 WHERE id=?",
             (content_hash, version_id),
+        )
+        self._adopt_for_playback(
+            connection, str(version["video_id"]), version_id, str(version["source_type"])
+        )
+
+    def _adopt_for_playback(
+        self, connection: sqlite3.Connection, video_id: str, version_id: str, source_type: str
+    ) -> None:
+        # Fresh subtitles show without a trip to the subtitle panel: the first complete
+        # version fills an empty playback slot, and a finished translation takes it over.
+        connection.execute(
+            "UPDATE videos SET playback_version_id=? "
+            "WHERE id=? AND (playback_version_id IS NULL OR ?='translation')",
+            (version_id, video_id, source_type),
         )
 
     def set_subtitle_selection(self, video_id: str, selection: str, version_id: str | None) -> None:

@@ -25,6 +25,27 @@ def test_import_versions_are_immutable_and_selections_independent(tmp_path: Path
     assert library.subtitle_cues(str(first["id"]))[0].text == "Hello"
 
 
+def test_new_subtitles_fill_playback_and_translations_take_it_over(tmp_path: Path) -> None:
+    library = Library(tmp_path)
+    library.initialize()
+    video_id = str(
+        library.import_video("abcdefghijk", "影片", 10, "https://youtube.com", "{}")["id"]
+    )
+    cues = parse_subtitles(b"1\n00:00:01,000 --> 00:00:02,000\nHello\n", "srt", 10).cues
+    original = library.create_subtitle_version(video_id, "en", "original", "import", cues)
+    assert library.get_video(video_id)["playback_version_id"] == original["id"]
+    library.create_subtitle_version(video_id, "en", "another", "import", cues)
+    assert library.get_video(video_id)["playback_version_id"] == original["id"]
+    pending = library.create_subtitle_version(
+        video_id, "zh-TW", "譯文", "translation", [], parent_id=str(original["id"]), complete=False
+    )
+    assert library.get_video(video_id)["playback_version_id"] == original["id"]
+    with library._connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        library.complete_subtitle_version(connection, str(pending["id"]), cues)
+    assert library.get_video(video_id)["playback_version_id"] == pending["id"]
+
+
 def test_subtitle_parse_clips_and_removes_script() -> None:
     parsed = parse_subtitles(
         b"\xef\xbb\xbfWEBVTT\n\n00:01.000 --> 00:10.500\n<b>Hello</b><script>x()</script>\n",
@@ -257,6 +278,51 @@ def test_a_region_tagged_original_still_finds_its_base_language_track(tmp_path: 
     language, kind, _ = acquire_subtitles(Adapter(), ASR(), source, tmp_path / "media", Event())
     assert (language, kind) == ("en", "platform_manual")
     assert calls == ["manual"]
+
+
+def test_the_original_automatic_track_wins_over_a_translated_one(tmp_path: Path) -> None:
+    """YouTube's automatic `en` may be translated from another language and rejected with 429;
+    the original-language recognition is keyed `en-orig`."""
+    from threading import Event
+
+    from video_content_capture.workspace.subtitles import acquire_subtitles
+    from video_content_capture.workspace.youtube import SourceMetadata, SubtitleTrack
+
+    source = SourceMetadata(
+        youtube_id="abcdefghijk",
+        source_url="https://youtube.com",
+        title="one",
+        duration=10,
+        formats=[],
+        audio_tracks=[],
+        subtitles=[
+            SubtitleTrack(language="en", automatic=True, extensions=["vtt"]),
+            SubtitleTrack(language="en-orig", automatic=True, extensions=["vtt"]),
+        ],
+        default_format_id="v",
+        default_audio_id="a",
+        above_1080p=False,
+        original_language="en-US",
+    )
+    requested: list[str] = []
+
+    class Adapter:
+        def query(self, *args: object) -> SourceMetadata:
+            return source
+
+        def download_subtitle(
+            self, _source: object, track: SubtitleTrack, _cancel: object
+        ) -> bytes:
+            requested.append(track.language)
+            return b"WEBVTT\n\n00:01.000 --> 00:02.000\nhello"
+
+    class ASR:
+        def transcribe(self, *args: object) -> object:
+            raise AssertionError("A platform track exists, so local recognition must not run")
+
+    language, kind, _ = acquire_subtitles(Adapter(), ASR(), source, tmp_path / "media", Event())
+    assert requested == ["en-orig"]
+    assert (language, kind) == ("en", "platform_auto")
 
 
 def test_an_exact_regional_track_still_wins_over_its_base_language(tmp_path: Path) -> None:
