@@ -12,9 +12,9 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from video_content_capture.workspace.config import WorkspaceSettings
 from video_content_capture.workspace.exports import ProcessRunner
+from video_content_capture.workspace.source import SourceError, run_process
 from video_content_capture.workspace.subtitles import Cue, validate_cues, validate_language
 from video_content_capture.workspace.translation import log_provider_failure, provider_error
-from video_content_capture.workspace.youtube import SourceError, run_process
 
 # The model often stops transcribing up to ~25 s before a chunk ends, at any chunk length, so
 # each chunk restarts where the last kept segment ended and the dropped tail is heard again.

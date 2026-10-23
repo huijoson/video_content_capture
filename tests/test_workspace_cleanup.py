@@ -9,10 +9,10 @@ from video_content_capture.workspace.storage import Library
 from video_content_capture.workspace.subtitles import Cue
 
 
-def seed(tmp_path: Path, youtube_id: str = "abcdefghijk"):
+def seed(tmp_path: Path, source_key: str = "youtube:abcdefghijk"):
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video(youtube_id, "影片", 10, "url", "{}")["id"])
+    video_id = str(library.import_video(source_key, "影片", 10, "url", "{}")["id"])
     root = library.video_dir(video_id)
     (root / "source" / "asset.mkv").write_bytes(b"s" * 100)
     preview_name = "a" * 32 + ".mp4"
@@ -124,7 +124,7 @@ def test_clear_previews_cancels_active_preview_jobs(tmp_path: Path) -> None:
 
 def test_delete_video_marks_deleting_then_removes_files_and_rows(tmp_path: Path) -> None:
     library, video_id, root, _ = seed(tmp_path)
-    other_id = str(library.import_video("lmnopqrstuv", "other", 10, "url", "{}")["id"])
+    other_id = str(library.import_video("youtube:lmnopqrstuv", "other", 10, "url", "{}")["id"])
     other_root = library.video_dir(other_id)
     (other_root / "source" / "keep.mkv").write_bytes(b"keep")
     running = library.create_job(video_id, "v", "a")
@@ -156,7 +156,7 @@ def test_delete_video_marks_deleting_then_removes_files_and_rows(tmp_path: Path)
             assert count == 0, table
     assert (other_root / "source" / "keep.mkv").read_bytes() == b"keep"
     # The same YouTube ID can be imported again with a new owner ID.
-    again = library.import_video("abcdefghijk", "影片", 10, "url", "{}")
+    again = library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")
     assert again["id"] != video_id
 
 
@@ -204,7 +204,7 @@ def test_failed_purge_stays_pending_and_can_be_retried(tmp_path: Path, monkeypat
     with pytest.raises(ValueError):
         library.get_video(video_id)
     with pytest.raises(ValueError):
-        library.import_video("abcdefghijk", "影片", 10, "url", "{}")
+        library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")
     monkeypatch.setattr(Library, "_remove_entry", original)
     library.purge_video(video_id)
     assert not root.exists()

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>YouTube 影片工作區</title>
+  <title>影片工作區</title>
   <link rel="stylesheet" href="/static/workspace.css">
   <script src="/static/dialog.js" defer></script>
   <script src="/static/workspace.js" defer></script>
@@ -14,18 +14,18 @@
   <a class="skip-link" href="#workspace">跳到工作區</a>
   <header class="app-header">
     <div class="app-bar">
-      <h1>YouTube 影片工作區</h1>
+      <h1>影片工作區</h1>
       <p id="service-status" class="status-line" role="status">正在讀取服務狀態…</p>
     </div>
     <form id="import-form" class="import-form">
-      <label for="youtube-url">YouTube 影片網址</label>
+      <label for="source-url">影片網址（YouTube、X 等）</label>
       <div class="url-row">
-        <input id="youtube-url" name="youtube-url" type="url"
+        <input id="source-url" name="source-url" type="url"
           placeholder="貼上一支影片網址" aria-describedby="import-help" autocomplete="off" required>
         <button id="load-video" class="primary" type="submit">載入影片</button>
         <button id="cancel-query" type="button" hidden>取消查詢</button>
       </div>
-      <p id="import-help" class="hint">貼上網址即自動查詢；確認解析度後按開始處理才下載。</p>
+      <p id="import-help" class="hint">支援 YouTube、X 與其他 yt-dlp 可解析的網站；貼上網址即自動查詢，確認解析度後按開始處理才下載。</p>
     </form>
     <p id="gemini-help" class="notice"><span class="mark" data-mark="info" aria-hidden="true"></span>
       Gemini 未設定：翻譯與問答需要在專案根目錄 <code>.env</code> 設定
@@ -65,7 +65,7 @@
       <div id="library-empty" class="empty-state" hidden>
         <p>影片庫目前是空的。</p>
         <ol>
-          <li>在上方貼上一支 YouTube 影片網址，按「載入影片」。</li>
+          <li>在上方貼上一支影片網址（YouTube、X 等），按「載入影片」。</li>
           <li>選擇解析度後按「開始處理」。</li>
           <li>取得或匯入字幕後即可播放、翻譯、匯出與提問。</li>
         </ol>

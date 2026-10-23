@@ -11,7 +11,7 @@ FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
 def test_import_versions_are_immutable_and_selections_independent(tmp_path: Path) -> None:
     library = Library(tmp_path)
     library.initialize()
-    video = library.import_video("abcdefghijk", "影片", 10, "https://youtube.com", "{}")
+    video = library.import_video("youtube:abcdefghijk", "影片", 10, "https://youtube.com", "{}")
     parsed = parse_subtitles(b"1\n00:00:01,000 --> 00:00:02,000\nHello\n", "srt", 10)
     first = library.create_subtitle_version(str(video["id"]), "en", "same", "import", parsed.cues)
     second = library.create_subtitle_version(str(video["id"]), "en", "same", "import", parsed.cues)
@@ -29,7 +29,7 @@ def test_new_subtitles_fill_playback_and_translations_take_it_over(tmp_path: Pat
     library = Library(tmp_path)
     library.initialize()
     video_id = str(
-        library.import_video("abcdefghijk", "影片", 10, "https://youtube.com", "{}")["id"]
+        library.import_video("youtube:abcdefghijk", "影片", 10, "https://youtube.com", "{}")["id"]
     )
     cues = parse_subtitles(b"1\n00:00:01,000 --> 00:00:02,000\nHello\n", "srt", 10).cues
     original = library.create_subtitle_version(video_id, "en", "original", "import", cues)
@@ -68,7 +68,7 @@ def test_v2_migration_backs_up_without_readding_columns(tmp_path: Path) -> None:
 
     library = Library(tmp_path)
     library.initialize()
-    video = library.import_video("abcdefghijk", "old", 10, "https://youtube.com", "{}")
+    video = library.import_video("youtube:abcdefghijk", "old", 10, "https://youtube.com", "{}")
     with sqlite3.connect(library.db_path) as connection:
         for table in ("subtitle_cues", "subtitle_versions", "export_artifacts"):
             connection.execute(f"DROP TABLE {table}")
@@ -80,6 +80,12 @@ def test_v2_migration_backs_up_without_readding_columns(tmp_path: Path) -> None:
         ):
             connection.execute(f"ALTER TABLE videos DROP COLUMN {column}")
         connection.execute("ALTER TABLE jobs DROP COLUMN snapshot")
+        connection.execute("ALTER TABLE videos RENAME COLUMN source_key TO youtube_id")
+        connection.execute("DROP INDEX videos_source_key")
+        connection.execute("CREATE UNIQUE INDEX videos_youtube_id ON videos (youtube_id)")
+        connection.execute(
+            "UPDATE videos SET youtube_id=substr(youtube_id, 9) WHERE youtube_id LIKE 'youtube:%'"
+        )
         connection.execute("PRAGMA user_version=2")
     library.initialize()
     assert library.get_video(str(video["id"]))["title"] == "old"
@@ -92,8 +98,8 @@ def test_v2_migration_backs_up_without_readding_columns(tmp_path: Path) -> None:
 def test_incomplete_and_other_video_versions_cannot_be_selected(tmp_path: Path) -> None:
     library = Library(tmp_path)
     library.initialize()
-    first = library.import_video("abcdefghijk", "one", 10, "https://youtube.com", "{}")
-    second = library.import_video("01234567890", "two", 10, "https://youtube.com", "{}")
+    first = library.import_video("youtube:abcdefghijk", "one", 10, "https://youtube.com", "{}")
+    second = library.import_video("youtube:01234567890", "two", 10, "https://youtube.com", "{}")
     version = library.create_subtitle_version(
         str(first["id"]), "zh-TW", "pending", "translation", [], complete=False
     )
@@ -190,11 +196,12 @@ def test_mlx_drops_segments_that_cannot_be_spoken_audio(tmp_path: Path) -> None:
 def test_acquisition_priority(tracks: list[bool], expected: str, tmp_path: Path) -> None:
     from threading import Event
 
+    from video_content_capture.workspace.source import SourceMetadata, SubtitleTrack
     from video_content_capture.workspace.subtitles import Cue, acquire_subtitles
-    from video_content_capture.workspace.youtube import SourceMetadata, SubtitleTrack
 
     source = SourceMetadata(
-        youtube_id="abcdefghijk",
+        source_key="youtube:abcdefghijk",
+        site="YouTube",
         source_url="https://youtube.com",
         title="one",
         duration=10,
@@ -243,11 +250,12 @@ def test_a_region_tagged_original_still_finds_its_base_language_track(tmp_path: 
     """
     from threading import Event
 
+    from video_content_capture.workspace.source import SourceMetadata, SubtitleTrack
     from video_content_capture.workspace.subtitles import acquire_subtitles
-    from video_content_capture.workspace.youtube import SourceMetadata, SubtitleTrack
 
     source = SourceMetadata(
-        youtube_id="abcdefghijk",
+        source_key="youtube:abcdefghijk",
+        site="YouTube",
         source_url="https://youtube.com",
         title="one",
         duration=10,
@@ -286,11 +294,12 @@ def test_the_original_automatic_track_wins_over_a_translated_one(tmp_path: Path)
     the original-language recognition is keyed `en-orig`."""
     from threading import Event
 
+    from video_content_capture.workspace.source import SourceMetadata, SubtitleTrack
     from video_content_capture.workspace.subtitles import acquire_subtitles
-    from video_content_capture.workspace.youtube import SourceMetadata, SubtitleTrack
 
     source = SourceMetadata(
-        youtube_id="abcdefghijk",
+        source_key="youtube:abcdefghijk",
+        site="YouTube",
         source_url="https://youtube.com",
         title="one",
         duration=10,
@@ -331,11 +340,12 @@ def test_a_translated_automatic_track_alone_goes_to_local_recognition(tmp_path: 
     a machine translation that it rejects with 429, so the speech itself is recognised."""
     from threading import Event
 
+    from video_content_capture.workspace.source import SourceMetadata, SubtitleTrack
     from video_content_capture.workspace.subtitles import Cue, acquire_subtitles
-    from video_content_capture.workspace.youtube import SourceMetadata, SubtitleTrack
 
     source = SourceMetadata(
-        youtube_id="abcdefghijk",
+        source_key="youtube:abcdefghijk",
+        site="YouTube",
         source_url="https://youtube.com",
         title="one",
         duration=10,
@@ -374,11 +384,12 @@ def test_an_exact_regional_track_still_wins_over_its_base_language(tmp_path: Pat
     """
     from threading import Event
 
+    from video_content_capture.workspace.source import SourceMetadata, SubtitleTrack
     from video_content_capture.workspace.subtitles import acquire_subtitles
-    from video_content_capture.workspace.youtube import SourceMetadata, SubtitleTrack
 
     source = SourceMetadata(
-        youtube_id="abcdefghijk",
+        source_key="youtube:abcdefghijk",
+        site="YouTube",
         source_url="https://youtube.com",
         title="one",
         duration=10,
@@ -415,11 +426,12 @@ def test_an_exact_regional_track_still_wins_over_its_base_language(tmp_path: Pat
 def test_caption_list_failure_never_calls_asr(tmp_path: Path) -> None:
     from threading import Event
 
+    from video_content_capture.workspace.source import SourceMetadata
     from video_content_capture.workspace.subtitles import acquire_subtitles
-    from video_content_capture.workspace.youtube import SourceMetadata
 
     source = SourceMetadata(
-        youtube_id="abcdefghijk",
+        source_key="youtube:abcdefghijk",
+        site="YouTube",
         source_url="https://youtube.com",
         title="one",
         duration=10,
@@ -456,13 +468,14 @@ def test_acquisition_rejects_unsafe_asset_and_late_cancel(tmp_path: Path, failur
     from threading import Event
     from uuid import uuid4
 
+    from video_content_capture.workspace.source import SourceMetadata
     from video_content_capture.workspace.subtitles import AcquisitionService, Cue
-    from video_content_capture.workspace.youtube import SourceMetadata
 
     library = Library(tmp_path / "library")
     library.initialize()
     source = SourceMetadata(
-        youtube_id="abcdefghijk",
+        source_key="youtube:abcdefghijk",
+        site="YouTube",
         source_url="https://youtube.com",
         title="one",
         duration=10,
@@ -475,7 +488,7 @@ def test_acquisition_rejects_unsafe_asset_and_late_cancel(tmp_path: Path, failur
         original_language="en",
     )
     video = library.import_video(
-        source.youtube_id,
+        source.source_key,
         source.title,
         source.duration,
         source.source_url,
@@ -534,12 +547,13 @@ def test_ambiguous_or_disappeared_platform_track_never_calls_asr(
 ) -> None:
     from threading import Event
 
+    from video_content_capture.workspace.source import SourceError, SourceMetadata, SubtitleTrack
     from video_content_capture.workspace.subtitles import acquire_subtitles
-    from video_content_capture.workspace.youtube import SourceError, SourceMetadata, SubtitleTrack
 
     track = SubtitleTrack(language="en", automatic=False, extensions=["vtt"])
     source = SourceMetadata(
-        youtube_id="abcdefghijk",
+        source_key="youtube:abcdefghijk",
+        site="YouTube",
         source_url="https://youtube.com",
         title="one",
         duration=10,
@@ -705,13 +719,14 @@ def run_recognition(tmp_path: Path, failure: Exception) -> tuple[Library, str]:
     from threading import Event
     from uuid import uuid4
 
+    from video_content_capture.workspace.source import SourceMetadata
     from video_content_capture.workspace.subtitles import AcquisitionService
-    from video_content_capture.workspace.youtube import SourceMetadata
 
     library = Library(tmp_path / "library")
     library.initialize()
     source = SourceMetadata(
-        youtube_id="abcdefghijk",
+        source_key="youtube:abcdefghijk",
+        site="YouTube",
         source_url="https://youtube.com",
         title="one",
         duration=10,
@@ -725,7 +740,7 @@ def run_recognition(tmp_path: Path, failure: Exception) -> tuple[Library, str]:
     )
     video_id = str(
         library.import_video(
-            source.youtube_id, source.title, 10, source.source_url, source.model_dump_json()
+            source.source_key, source.title, 10, source.source_url, source.model_dump_json()
         )["id"]
     )
     media = library.video_dir(video_id) / "source" / "media.mp4"
@@ -762,7 +777,7 @@ def run_recognition(tmp_path: Path, failure: Exception) -> tuple[Library, str]:
 
 
 def test_recognition_failure_code_reaches_the_job(tmp_path: Path) -> None:
-    from video_content_capture.workspace.youtube import SourceError
+    from video_content_capture.workspace.source import SourceError
 
     library, job_id = run_recognition(
         tmp_path, SourceError("asr_rate_limited;retry_after=42s", "語音辨識服務失敗")
@@ -785,8 +800,8 @@ def test_mlx_without_apple_silicon_is_named(
     from threading import Event
 
     from video_content_capture.domain.errors import ConfigurationError
+    from video_content_capture.workspace.source import SourceError
     from video_content_capture.workspace.subtitles import MLXSubtitleAdapter
-    from video_content_capture.workspace.youtube import SourceError
 
     def no_mlx() -> object:
         raise ConfigurationError("MLX transcription requires an Apple Silicon Mac")

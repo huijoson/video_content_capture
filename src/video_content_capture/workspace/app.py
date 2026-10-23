@@ -31,6 +31,13 @@ from video_content_capture.workspace.qa import QAAdapter
 from video_content_capture.workspace.qa_jobs import QAService
 from video_content_capture.workspace.quality import SubtitleForm, quality_options, resolve_source
 from video_content_capture.workspace.security import LocalBoundary, configure_redaction, public_text
+from video_content_capture.workspace.source import (
+    SourceAdapter,
+    SourceError,
+    SourceMetadata,
+    YtDlpAdapter,
+    normalize_source_url,
+)
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.subtitle_catalog import SubtitleCatalog
 from video_content_capture.workspace.subtitles import (
@@ -42,13 +49,6 @@ from video_content_capture.workspace.subtitles import (
     render_subtitles,
 )
 from video_content_capture.workspace.translation import TranslationAdapter, TranslationService
-from video_content_capture.workspace.youtube import (
-    SourceError,
-    SourceMetadata,
-    YoutubeAdapter,
-    YtDlpAdapter,
-    parse_youtube_url,
-)
 
 ASR_ADAPTERS: dict[ASRBackend, Callable[[WorkspaceSettings], ASRAdapter]] = {
     "gemini": GeminiSubtitleAdapter,
@@ -140,7 +140,7 @@ class DeleteRequest(BaseModel):
 
 def create_app(
     settings: WorkspaceSettings,
-    adapter: YoutubeAdapter | None = None,
+    adapter: SourceAdapter | None = None,
     *,
     translation_adapter: TranslationAdapter | None = None,
     qa_adapter: QAAdapter | None = None,
@@ -226,7 +226,7 @@ def create_app(
             return value
 
         sanitized = SourceMetadata.model_validate(scrub(source.model_dump(mode="json")))
-        if sanitized.source_url != source.source_url or sanitized.youtube_id != source.youtube_id:
+        if sanitized.source_url != source.source_url or sanitized.source_key != source.source_key:
             raise ValueError("Invalid source identity")
         return sanitized
 
@@ -361,19 +361,24 @@ def create_app(
     @app.post("/api/query")
     def query(body: QueryRequest) -> Record:
         try:
-            youtube_id, url = parse_youtube_url(body.url)
-            for video in library.list_videos():
-                if video["youtube_id"] == youtube_id:
-                    if body.refresh:
-                        fresh = downloader.query(url)
-                        fresh = safe_source(fresh)
-                        library.refresh_metadata(str(video["id"]), fresh.model_dump_json())
-                    return opened(str(video["id"]))
-            source = downloader.query(url)
-            source = safe_source(source)
-            video = library.import_video(
-                youtube_id, source.title, source.duration, url, source.model_dump_json()
-            )
+            url = normalize_source_url(body.url)
+            video = library.find_video_by_url(url)
+            if video is not None and not body.refresh:
+                return opened(str(video["id"]))
+            source = safe_source(downloader.query(url))
+            if video is not None and video["source_key"] != source.source_key:
+                raise ValueError("Source identity changed")
+            video = library.find_video_by_source_key(source.source_key)
+            if video is not None:
+                library.refresh_metadata(str(video["id"]), source.model_dump_json())
+            else:
+                video = library.import_video(
+                    source.source_key,
+                    source.title,
+                    source.duration,
+                    source.source_url,
+                    source.model_dump_json(),
+                )
             return opened(str(video["id"]))
         except (ValueError, SourceError) as error:
             raise HTTPException(400, "來源不支援／無法取得") from error

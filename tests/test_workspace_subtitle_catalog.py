@@ -14,7 +14,7 @@ CUES = [Cue(id="one", start=1, end=2, text="hello")]
 def setup_library(tmp_path: Path) -> tuple[Library, str, dict, dict]:
     library = Library(tmp_path / "library")
     library.initialize()
-    video = library.import_video("abcdefghijk", "one", 10, "https://youtube.com", "{}")
+    video = library.import_video("youtube:abcdefghijk", "one", 10, "https://youtube.com", "{}")
     first = library.create_subtitle_version(
         str(video["id"]), "en", "first", "platform_manual", CUES
     )
@@ -26,9 +26,7 @@ def setup_library(tmp_path: Path) -> tuple[Library, str, dict, dict]:
 
 def stale_pointer(library: Library, video_id: str, column: str) -> None:
     with sqlite3.connect(library.db_path) as connection:
-        connection.execute(
-            f"UPDATE videos SET {column}='gone' WHERE id=?", (video_id,)
-        )
+        connection.execute(f"UPDATE videos SET {column}='gone' WHERE id=?", (video_id,))
 
 
 def test_version_for_returns_the_selection_and_clears_a_stale_pointer(tmp_path: Path) -> None:

@@ -15,12 +15,12 @@ from typing import TYPE_CHECKING, Protocol
 from pydantic import BaseModel, ConfigDict
 
 from video_content_capture.redaction import scrub_text
-from video_content_capture.workspace.youtube import (
+from video_content_capture.workspace.source import (
     ORIGINAL_SUFFIX,
+    SourceAdapter,
     SourceError,
     SourceMetadata,
     SubtitleTrack,
-    YoutubeAdapter,
 )
 
 if TYPE_CHECKING:
@@ -334,7 +334,7 @@ class MLXSubtitleAdapter:
 
 
 def acquire_subtitles(
-    adapter: YoutubeAdapter,
+    adapter: SourceAdapter,
     asr: ASRAdapter,
     source: SourceMetadata,
     media_path: Path,
@@ -379,7 +379,7 @@ class AcquisitionService:
     def __init__(
         self,
         library: Library,
-        adapter: YoutubeAdapter,
+        adapter: SourceAdapter,
         asr: ASRAdapter,
         scrub: Callable[[str], str] = scrub_text,
         publisher: ArtifactPublisher | None = None,

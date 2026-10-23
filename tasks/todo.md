@@ -769,3 +769,43 @@
   「原語系未知且平台已有字幕」時顯示「平台字幕（待選擇）」並在開始前阻擋
   （`source_choice_required`），不再下載完整影片後才於字幕階段失敗。
 - 翻譯失敗後僅能以 retry 重跑整塊，無塊內重試；`BATCH_SIZE` 為模組常數，未進 snapshot。
+
+
+## 2026-10-23 Any-site video sources
+
+### Acceptance criteria
+- Accept single HTTP(S) videos supported by yt-dlp; retain YouTube canonicalization.
+- Preserve unknown codecs and verify downloaded media using probed codecs.
+- Migrate v9 identity and snapshots to source_key/site without losing data.
+- Re-querying an imported URL opens the same video without another adapter query.
+
+### Checklist
+- [x] Read brief, repository guidance, lessons and existing implementation.
+- [x] Implement source adapter and behavior tests.
+- [x] Migrate storage and snapshots with v9 coverage.
+- [x] Update API, exports, imports, UI copy and fixtures.
+- [x] Verify full Ruff, format, mypy and pytest command; inspect diff.
+
+### Risk & Rollback
+- Medium: persistent schema v10 and media acquisition. Preserve automatic upgrade backup;
+  stop service and restore the pre-upgrade database before using the previous version.
+- Do not commit or modify existing .github/, .impeccable/, or reports/ changes.
+
+### Dependencies & Environment
+- Python 3.13, uv, existing yt-dlp, ffmpeg/ffprobe; offline fixtures for verification.
+
+### Working Notes
+- Source identity comes from extractor metadata, never a URL path (X media IDs differ).
+- Only literal codec `none` proves a stream is absent.
+
+### Results
+- Implemented the brief with no behavioral deviations; existing YouTube default selections pass
+  unchanged. Historical migration fixtures now restore the historical identity column/index,
+  and multi-video adapter fixtures return distinct identities for distinct URLs.
+- Source tests: 66 passed, including real local ffmpeg integration; storage tests: 19 passed.
+- Required full command exited 0: Ruff `All checks passed!`; format `92 files already formatted`;
+  mypy `Success: no issues found in 50 source files`; pytest reached 100%, one opt-in test skipped.
+- Existing Starlette/httpx deprecation warning remains. JS syntax, UI detector (`[]`) and
+  `git diff --check` pass. Independent read-only correctness/security review found no defects.
+- No live website download performed; X behavior is verified against the brief's measured fixture.
+- No commits; pre-existing protected changes preserved. Full file list: tasks/any-site-source-report.md.

@@ -24,7 +24,7 @@ from uuid import uuid4
 from video_content_capture.redaction import scrub_text
 from video_content_capture.workspace.subtitles import Cue, validate_cues, validate_language
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 # The four user-facing subtitle purposes, each with its own pointer (ADR 0002).
 SUBTITLE_SELECTIONS = {
     "playback": "playback_version_id",
@@ -238,6 +238,26 @@ class Library:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
             if "result" not in columns:
                 connection.execute("ALTER TABLE jobs ADD COLUMN result TEXT")
+        if version < 10:
+            connection.execute("ALTER TABLE videos RENAME COLUMN youtube_id TO source_key")
+            connection.execute(
+                "UPDATE videos SET source_key='youtube:' || source_key "
+                "WHERE instr(source_key, ':')=0"
+            )
+            connection.execute("DROP INDEX videos_youtube_id")
+            connection.execute("CREATE UNIQUE INDEX videos_source_key ON videos (source_key)")
+            connection.execute(
+                "UPDATE videos SET metadata=json_remove(json_set(metadata, "
+                "'$.source_key', 'youtube:' || json_extract(metadata, '$.youtube_id'), "
+                "'$.site', 'YouTube'), '$.youtube_id') "
+                "WHERE json_type(metadata, '$.youtube_id')='text'"
+            )
+            connection.execute(
+                "UPDATE jobs SET snapshot=json_remove(json_set(snapshot, "
+                "'$.source_key', 'youtube:' || json_extract(snapshot, '$.youtube_id')), "
+                "'$.youtube_id') WHERE kind='export' "
+                "AND json_type(snapshot, '$.youtube_id')='text'"
+            )
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @staticmethod
@@ -253,28 +273,49 @@ class Library:
         return [dict(zip(keys, row, strict=True)) for row in cursor.fetchall()]
 
     def import_video(
-        self, youtube_id: str, title: str, duration: float, source_url: str, metadata: str
+        self, source_key: str, title: str, duration: float, source_url: str, metadata: str
     ) -> Record:
         json.loads(metadata)
         now = datetime.now(UTC).isoformat()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT * FROM videos WHERE youtube_id = ?", (youtube_id,)
+                "SELECT * FROM videos WHERE source_key = ?", (source_key,)
             )
             if existing.fetchone() is None:
                 connection.execute(
-                    "INSERT INTO videos (id,title,created_at,updated_at,youtube_id,duration,"
+                    "INSERT INTO videos (id,title,created_at,updated_at,source_key,duration,"
                     "source_url,metadata) VALUES (?,?,?,?,?,?,?,?)",
-                    (uuid4().hex, title, now, now, youtube_id, duration, source_url, metadata),
+                    (uuid4().hex, title, now, now, source_key, duration, source_url, metadata),
                 )
             result = self._record(
                 connection.execute(
-                    "SELECT * FROM videos WHERE youtube_id = ? AND deleting = 0", (youtube_id,)
+                    "SELECT * FROM videos WHERE source_key = ? AND deleting = 0", (source_key,)
                 )
             )
         self.video_dir(str(result["id"]))
         return result
+
+    def find_video_by_url(self, url: str) -> Record | None:
+        with self._connect() as connection:
+            records = self._records(
+                connection.execute(
+                    "SELECT * FROM videos WHERE source_url = ? AND deleting = 0 "
+                    "ORDER BY created_at,id LIMIT 1",
+                    (url,),
+                )
+            )
+        return records[0] if records else None
+
+    def find_video_by_source_key(self, source_key: str) -> Record | None:
+        with self._connect() as connection:
+            records = self._records(
+                connection.execute(
+                    "SELECT * FROM videos WHERE source_key = ? AND deleting = 0",
+                    (source_key,),
+                )
+            )
+        return records[0] if records else None
 
     def get_video(self, video_id: str) -> Record:
         with self._connect() as connection:
@@ -1338,7 +1379,7 @@ class Library:
         with self._connect() as connection:
             return self._records(
                 connection.execute(
-                    "SELECT id,title,youtube_id FROM videos WHERE deleting=1 ORDER BY created_at,id"
+                    "SELECT id,title,source_key FROM videos WHERE deleting=1 ORDER BY created_at,id"
                 )
             )
 

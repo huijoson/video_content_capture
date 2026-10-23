@@ -4,11 +4,11 @@ from threading import Event
 
 import pytest
 
-from video_content_capture.workspace.youtube import (
+from video_content_capture.workspace.source import (
     SourceError,
     YtDlpAdapter,
+    normalize_source_url,
     parse_metadata,
-    parse_youtube_url,
 )
 
 ID = "Abc_123-xyz"
@@ -25,7 +25,7 @@ ID = "Abc_123-xyz"
     ],
 )
 def test_single_video_urls(url: str) -> None:
-    assert parse_youtube_url(url) == (ID, f"https://www.youtube.com/watch?v={ID}")
+    assert normalize_source_url(url) == f"https://www.youtube.com/watch?v={ID}"
 
 
 @pytest.mark.parametrize(
@@ -33,23 +33,22 @@ def test_single_video_urls(url: str) -> None:
     [
         "file:///tmp/movie.mp4",
         "/tmp/movie.mp4",
-        "https://example.com/watch?v=Abc_123-xyz",
         "https://youtube.com/playlist?list=PL123",
         "https://youtube.com/watch?v=short",
-        "https://youtube.com.evil.test/watch?v=Abc_123-xyz",
         "https://user:secret@youtube.com/watch?v=Abc_123-xyz",
         "https://youtu.be/Abc_123-xyz https://youtu.be/Abc_123-xyz",
         "https://youtube.com/watch?v=Abc_123-xyz&v=ZZZ_123-xyz",
     ],
 )
 def test_invalid_urls(url: str) -> None:
-    with pytest.raises(SourceError, match="YouTube"):
-        parse_youtube_url(url)
+    with pytest.raises(SourceError, match="請輸入單支影片網址"):
+        normalize_source_url(url)
 
 
 def info() -> dict[str, object]:
     return {
         "id": ID,
+        "extractor_key": "Youtube",
         "title": "Example",
         "duration": 30,
         "formats": [
@@ -65,6 +64,10 @@ def info() -> dict[str, object]:
 def test_quality_and_unknown_audio() -> None:
     result = parse_metadata(info(), f"https://youtu.be/{ID}")
     assert result.default_format_id == "v1080f"
+    assert result.default_audio_id == "a"
+    assert [track.id for track in result.audio_tracks] == ["a"]
+    assert result.source_key == f"youtube:{ID}"
+    assert result.site == "YouTube"
     assert not result.above_1080p
     assert result.original_language is None
     assert result.audio_tracks[0].language == "未知"
@@ -89,7 +92,7 @@ def test_only_downloadable_subtitle_tracks_are_offered() -> None:
 
 
 def test_metadata_stored_before_the_rule_no_longer_offers_translations() -> None:
-    from video_content_capture.workspace.youtube import SourceMetadata
+    from video_content_capture.workspace.source import SourceMetadata
 
     stored = parse_metadata(info(), f"https://youtu.be/{ID}").model_dump(mode="json")
     stored["subtitles"] = [
@@ -179,7 +182,7 @@ def test_subtitle_inventory_never_keeps_signed_urls() -> None:
 def test_cancelled_process_terminates_group(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
-    from video_content_capture.workspace import youtube
+    from video_content_capture.workspace import source as source_module
 
     cancelled = Event()
     terminated: list[int] = []
@@ -199,10 +202,10 @@ def test_cancelled_process_terminates_group(monkeypatch: pytest.MonkeyPatch) -> 
             self.returncode = -15
             return self.returncode
 
-    monkeypatch.setattr(youtube.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
-    monkeypatch.setattr(youtube.os, "killpg", lambda pid, sig: terminated.append(pid))
+    monkeypatch.setattr(source_module.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(source_module.os, "killpg", lambda pid, sig: terminated.append(pid))
     with pytest.raises(SourceError) as error:
-        youtube.run_process(["fake"], cancelled)
+        source_module.run_process(["fake"], cancelled)
     assert error.value.code == "cancelled"
     assert terminated == [12345]
 
@@ -309,7 +312,7 @@ def test_probe_rejects_invalid_selected_media(
 ) -> None:
     import json
 
-    from video_content_capture.workspace import youtube
+    from video_content_capture.workspace import source as source_module
 
     data = info()
     data["formats"] = [
@@ -349,7 +352,7 @@ def test_probe_rejects_invalid_selected_media(
             }
         )
 
-    monkeypatch.setattr(youtube, "run_process", fake_process)
+    monkeypatch.setattr(source_module, "run_process", fake_process)
     with pytest.raises(SourceError) as error:
         adapter.download(source, "v", "a", tmp_path, Event(), lambda *args: None)
     assert error.value.code == "invalid_media"
@@ -361,7 +364,7 @@ def test_completed_video_stage_survives_audio_failure_and_retry(
 ) -> None:
     import json
 
-    from video_content_capture.workspace import youtube
+    from video_content_capture.workspace import source as source_module
 
     data = info()
     data["formats"] = [
@@ -406,7 +409,7 @@ def test_completed_video_stage_survives_audio_failure_and_retry(
         )
 
     monkeypatch.setattr(adapter, "_api", fake_api)
-    monkeypatch.setattr(youtube, "run_process", fake_process)
+    monkeypatch.setattr(source_module, "run_process", fake_process)
     stages = Stages()
     with pytest.raises(SourceError, match="offline failure"):
         adapter.download(source, "v", "a", tmp_path, Event(), lambda *args: None, stages)
@@ -500,7 +503,7 @@ def test_helper_reports_a_redacted_reason_instead_of_failing_silently(
     import subprocess
     import sys
 
-    from video_content_capture.workspace import youtube
+    from video_content_capture.workspace import source as source_module
 
     package = tmp_path / "yt_dlp"
     (package / "networking").mkdir(parents=True)
@@ -508,7 +511,7 @@ def test_helper_reports_a_redacted_reason_instead_of_failing_silently(
     (package / "networking" / "exceptions.py").write_text(_HELPER_EXCEPTIONS_STUB)
     (package / "__init__.py").write_text(_HELPER_STUB.format(statement=_HELPER_SCENARIOS[scenario]))
     completed = subprocess.run(
-        [sys.executable, "-c", youtube._HELPER],
+        [sys.executable, "-c", source_module._HELPER],
         input=json.dumps({"mode": "query", "url": f"https://www.youtube.com/watch?v={ID}"}),
         capture_output=True,
         text=True,
@@ -525,7 +528,7 @@ def _payload(monkeypatch: pytest.MonkeyPatch, answers: list[str]) -> list[dict[s
     """Answer the helper with `answers` in order; a SourceError stops the script."""
     import json
 
-    from video_content_capture.workspace import youtube
+    from video_content_capture.workspace import source as source_module
 
     requests: list[dict[str, object]] = []
 
@@ -533,8 +536,8 @@ def _payload(monkeypatch: pytest.MonkeyPatch, answers: list[str]) -> list[dict[s
         requests.append(json.loads(str(kwargs["request"])))
         return answers[min(len(requests), len(answers)) - 1]
 
-    monkeypatch.setattr(youtube, "run_process", fake_process)
-    monkeypatch.setattr(youtube, "_TRANSIENT_DELAYS", (0.0, 0.0))
+    monkeypatch.setattr(source_module, "run_process", fake_process)
+    monkeypatch.setattr(source_module, "_TRANSIENT_DELAYS", (0.0, 0.0))
     return requests
 
 
@@ -593,3 +596,152 @@ def test_cancelling_during_the_backoff_ends_the_stage_immediately(
         adapter.query(f"https://youtu.be/{ID}", cancel)
     assert error.value.code == "cancelled"
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://x.com/historyinmemes/status/1790637656616943991",
+        "https://twitter.com/historyinmemes/status/1790637656616943991",
+        "https://example.com/video?id=123#fragment",
+    ],
+)
+def test_other_source_urls_keep_the_url_without_fragment(url: str) -> None:
+    assert normalize_source_url(url) == url.split("#")[0]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ytsearch:foo",
+        "file:///etc/passwd",
+        "https://user:pw@x.com/user/status/123",
+        "https://x.com:8080/user/status/123",
+        "https:///video",
+    ],
+)
+def test_unsafe_source_urls_are_rejected(url: str) -> None:
+    with pytest.raises(SourceError) as error:
+        normalize_source_url(url)
+    assert error.value.code == "invalid_url"
+
+
+def x_info() -> dict[str, object]:
+    return {
+        "id": "1790637589910654976",
+        "extractor_key": "Twitter",
+        "webpage_url": "https://x.com/historyinmemes/status/1790637656616943991",
+        "title": "Example X video",
+        "duration": 30,
+        "_type": "video",
+        "language": None,
+        "formats": [
+            {"format_id": "hls-audio-128000-Audio", "vcodec": "none", "acodec": None},
+            {"format_id": "http-2176", "vcodec": None, "acodec": None, "height": 720},
+            {"format_id": "hls-716", "vcodec": "avc1.64001F", "acodec": "none", "height": 720},
+        ],
+    }
+
+
+def test_x_unknown_codecs_and_media_identity() -> None:
+    result = parse_metadata(x_info(), "https://twitter.com/user/status/1790637656616943991")
+    assert result.source_key == "twitter:1790637589910654976"
+    assert result.site == "X"
+    assert result.source_url == x_info()["webpage_url"]
+    assert result.default_format_id == "hls-716"
+    assert result.default_audio_id == "hls-audio-128000-Audio"
+    assert result.formats[0].codec == ""
+    assert [track.codec for track in result.audio_tracks] == ["", ""]
+    assert [track.audio_only for track in result.audio_tracks] == [True, False]
+    assert result.subtitles == []
+
+
+@pytest.mark.parametrize("webpage_url", [None, "file:///tmp/secret", "https://user:pw@x.com/video"])
+def test_invalid_webpage_url_falls_back_to_submitted_url(webpage_url: object) -> None:
+    data = x_info()
+    data["webpage_url"] = webpage_url
+    submitted = "https://twitter.com/user/status/123#fragment"
+    assert parse_metadata(data, submitted).source_url == submitted.split("#")[0]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"extractor_key": None},
+        {"extractor_key": "Twitter:bad"},
+        {"id": "bad/id"},
+        {"id": "a" * 129},
+        {"id": ""},
+        {"_type": "playlist"},
+        {"_type": "multi_video"},
+        {"live_status": "post_live"},
+    ],
+)
+def test_invalid_source_identity_or_kind_is_unavailable(change: dict[str, object]) -> None:
+    data = x_info()
+    data.update(change)
+    with pytest.raises(SourceError) as error:
+        parse_metadata(data, "https://x.com/user/status/123")
+    assert error.value.code == "source_unavailable"
+
+
+@pytest.mark.parametrize("combined", [False, True])
+@pytest.mark.parametrize(
+    "video_codec,audio_codec,container", [("h264", "aac", "mp4"), ("vp9", "opus", "mkv")]
+)
+def test_unknown_codecs_are_probed_before_merge_and_combined_downloads_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    combined: bool,
+    video_codec: str,
+    audio_codec: str,
+    container: str,
+) -> None:
+    from video_content_capture.workspace import source as source_module
+
+    data = x_info()
+    data["formats"] = [
+        {"format_id": "v", "height": 64, "vcodec": None, "acodec": None},
+        {"format_id": "a", "vcodec": "none", "acodec": None},
+    ]
+    source = parse_metadata(data, "https://x.com/user/status/123")
+    adapter = YtDlpAdapter()
+    monkeypatch.setattr(adapter, "query", lambda url, cancel=None: source)
+    downloads: list[str] = []
+    commands: list[list[str]] = []
+
+    def fake_api(request, cancel):
+        downloads.append(request["format"])
+        path = tmp_path / f"{request['format']}.mp4"
+        path.write_bytes(b"downloaded fixture")
+        return {"path": str(path)}
+
+    def fake_process(command, cancel, **kwargs):
+        commands.append(command)
+        if command[0] == "ffmpeg":
+            assert len([item for item in commands if item[0] == "ffprobe"]) == 2
+            assert command[-1].endswith(f".{container}")
+            if combined:
+                assert command[command.index("-i") + 1] == command[command.index("-map") - 1]
+            Path(command[-1]).write_bytes(b"merged fixture")
+            return ""
+        return json.dumps(
+            {
+                "streams": [
+                    {"codec_type": "video", "codec_name": video_codec, "height": 64},
+                    {"codec_type": "audio", "codec_name": audio_codec},
+                ],
+                "format": {"duration": "30"},
+            }
+        )
+
+    monkeypatch.setattr(adapter, "_api", fake_api)
+    monkeypatch.setattr(source_module, "run_process", fake_process)
+    result = adapter.download(
+        source, "v", "v" if combined else "a", tmp_path, Event(), lambda *args: None
+    )
+    assert downloads == (["v"] if combined else ["v", "a"])
+    assert result.video_codec == video_codec
+    assert result.audio_codec == audio_codec
+    assert result.container == container
+    assert result.browser_playable == (container == "mp4")

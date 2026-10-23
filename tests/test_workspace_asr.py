@@ -12,7 +12,7 @@ from pydantic import SecretStr
 
 from video_content_capture.workspace.asr import CHUNK_SECONDS, GeminiSubtitleAdapter
 from video_content_capture.workspace.config import WorkspaceSettings
-from video_content_capture.workspace.youtube import SourceError
+from video_content_capture.workspace.source import SourceError
 
 
 def reply(language: str, *segments: tuple[float, float, str]) -> types.GenerateContentResponse:

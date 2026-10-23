@@ -11,9 +11,9 @@ def test_attempt_gate_rejects_cancel_retry_and_deleting(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
     video = library.import_video(
-        "abcdefghijk", "影片", 10, "https://youtube.com/watch?v=abcdefghijk", "{}"
+        "youtube:abcdefghijk", "影片", 10, "https://youtube.com/watch?v=abcdefghijk", "{}"
     )
-    assert library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"] == video["id"]
+    assert library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")["id"] == video["id"]
     job = library.create_job(str(video["id"]), "v1", "a1")
     assert library.create_job(str(video["id"]), "v1", "a1")["id"] == job["id"]
     first = library.start_job(str(job["id"]))
@@ -32,7 +32,7 @@ def test_attempt_gate_rejects_cancel_retry_and_deleting(tmp_path: Path) -> None:
 def test_job_transitions_restart_and_success(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video = library.import_video("abcdefghijk", "影片", 10, "url", "{}")
+    video = library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")
     job = library.create_job(str(video["id"]), "v", "a")
     with pytest.raises(ValueError):
         library.retry_job(str(job["id"]))
@@ -51,7 +51,7 @@ def test_job_transitions_restart_and_success(tmp_path: Path) -> None:
 def test_attempt_updates_and_callback_failure_are_fenced(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video = library.import_video("abcdefghijk", "影片", 10, "url", "{}")
+    video = library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")
     job_id = str(library.create_job(str(video["id"]), "v", "a")["id"])
     first = library.start_job(job_id)
     library.update_attempt(job_id, first, "download", error="network_error")
@@ -76,8 +76,8 @@ def test_attempt_updates_and_callback_failure_are_fenced(tmp_path: Path) -> None
 def test_one_media_job_runs_and_deleting_blocks_new_work(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    one = library.import_video("abcdefghijk", "first", 10, "url", "{}")
-    two = library.import_video("lmnopqrstuv", "second", 10, "url", "{}")
+    one = library.import_video("youtube:abcdefghijk", "first", 10, "url", "{}")
+    two = library.import_video("youtube:lmnopqrstuv", "second", 10, "url", "{}")
     first = str(library.create_job(str(one["id"]), "v", "a")["id"])
     second = str(library.create_job(str(two["id"]), "v", "a")["id"])
     attempt = library.start_job(first)
@@ -98,7 +98,7 @@ def test_one_media_job_runs_and_deleting_blocks_new_work(tmp_path: Path) -> None
 def test_playback_position_survives_reopen(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")["id"])
     library.set_position(video_id, 4.25)
     reopened = Library(library.root)
     reopened.initialize()
@@ -111,7 +111,7 @@ def test_playback_position_survives_reopen(tmp_path: Path) -> None:
 def test_distinct_quality_can_queue_and_metadata_can_refresh(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")["id"])
     one = library.create_job(video_id, "720", "original")
     two = library.create_job(video_id, "1080", "original")
     assert one["id"] != two["id"]
@@ -129,7 +129,7 @@ def test_distinct_quality_can_queue_and_metadata_can_refresh(tmp_path: Path) -> 
 def test_stage_checkpoint_is_fenced_and_does_not_complete_job(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")["id"])
     job_id = str(library.create_job(video_id, "v", "a")["id"])
     old_attempt = library.start_job(job_id)
     library.cancel_job(job_id)
@@ -175,7 +175,7 @@ def test_stage_checkpoint_is_fenced_and_does_not_complete_job(tmp_path: Path) ->
 def test_stage_checkpoint_survives_restart_and_failed_checkpoint_rolls_back(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")["id"])
     job_id = str(library.create_job(video_id, "v", "a")["id"])
     attempt = library.start_job(job_id)
     assert library.publish_stage(job_id, attempt, "video", "path", "sum", "fp", lambda db: None)
@@ -195,7 +195,7 @@ def test_stage_checkpoint_survives_restart_and_failed_checkpoint_rolls_back(tmp_
 def test_retry_does_not_duplicate_another_active_same_selection(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video = library.import_video("abcdefghijk", "影片", 10, "url", "{}")
+    video = library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")
     first = library.create_job(str(video["id"]), "v", "a")
     library.cancel_job(str(first["id"]))
     library.create_job(str(video["id"]), "v", "a")
@@ -258,11 +258,11 @@ def test_completion_hook_failure_never_stops_the_lane(tmp_path: Path) -> None:
     """A flow that blows up while chaining must not take the media worker down with it."""
     library, adapter, queue, job = setup_queue(tmp_path)
     other = library.import_video(
-        "lmnopqrstuv",
+        "youtube:lmnopqrstuv",
         "第二部",
         10,
         "https://youtu.be/lmnopqrstuv",
-        adapter.source.model_copy(update={"youtube_id": "lmnopqrstuv"}).model_dump_json(),
+        adapter.source.model_copy(update={"source_key": "youtube:lmnopqrstuv"}).model_dump_json(),
     )
     calls: list[str] = []
 

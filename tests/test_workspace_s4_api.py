@@ -63,10 +63,10 @@ def import_source(client, video_id, name="Original"):
     return response.json()["version"]["id"]
 
 
-def query_video(client, youtube_id="abcdefghijk"):
+def query_video(client, video_id="abcdefghijk"):
     return client.post(
         "/api/query",
-        json={"url": f"https://youtu.be/{youtube_id}"},
+        json={"url": f"https://youtu.be/{video_id}"},
         headers=ORIGIN,
     ).json()["id"]
 
@@ -192,7 +192,9 @@ def test_new_source_creates_conversation_and_old_one_is_restorable(tmp_path: Pat
 def test_restart_marks_pending_failed_and_never_resends(tmp_path: Path):
     library = Library(tmp_path / "library")
     library.initialize()
-    video = library.import_video("abcdefghijk", "影片", 100, "https://youtu.be/abcdefghijk", "{}")
+    video = library.import_video(
+        "youtube:abcdefghijk", "影片", 100, "https://youtu.be/abcdefghijk", "{}"
+    )
     from video_content_capture.workspace.subtitles import Cue
 
     source = library.create_subtitle_version(

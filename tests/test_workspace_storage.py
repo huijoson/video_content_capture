@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 from typing import BinaryIO
@@ -233,11 +234,17 @@ def test_v1_upgrade_preserves_records_and_backs_up(tmp_path: Path) -> None:
 def test_migration_adds_flow_tracking_to_existing_database(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "old", 10, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "old", 10, "url", "{}")["id"])
     with sqlite3.connect(library.db_path) as connection:
         connection.execute("DROP INDEX flows_one_running")
         connection.execute("DROP TABLE flows")
         connection.execute("ALTER TABLE jobs DROP COLUMN flow_id")
+        connection.execute("ALTER TABLE videos RENAME COLUMN source_key TO youtube_id")
+        connection.execute("DROP INDEX videos_source_key")
+        connection.execute("CREATE UNIQUE INDEX videos_youtube_id ON videos (youtube_id)")
+        connection.execute(
+            "UPDATE videos SET youtube_id=substr(youtube_id, 9) WHERE youtube_id LIKE 'youtube:%'"
+        )
         connection.execute("PRAGMA user_version = 6")
     upgraded = Library(library.root)
     upgraded.initialize()
@@ -254,7 +261,7 @@ def test_migration_adds_flow_tracking_to_existing_database(tmp_path: Path) -> No
 def test_flow_lifecycle_is_frozen_singular_and_interrupted_on_restart(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")["id"])
     flow = library._create_flow(video_id, "download", {"height": 1080, "target_language": "zh-TW"})
     with pytest.raises(ValueError):
         library._create_flow(video_id, "download", {"height": 720})
@@ -281,7 +288,7 @@ def test_flow_lifecycle_is_frozen_singular_and_interrupted_on_restart(tmp_path: 
 def test_reopen_flow_revives_only_ended_flows_and_keeps_one_running(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")["id"])
     flow = library._create_flow(video_id, "subtitles", {"target_language": "en"})
     flow_id = str(flow["id"])
 
@@ -312,7 +319,7 @@ def test_reopen_flow_revives_only_ended_flows_and_keeps_one_running(tmp_path: Pa
 def test_reopen_flow_refuses_while_another_flow_is_running(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")["id"])
     ended = library._create_flow(video_id, "download", {"target_language": "en"})
     library._update_flow(str(ended["id"]), status="failed", error="media_failed")
     running = library._create_flow(video_id, "download", {"target_language": "en"})
@@ -326,7 +333,7 @@ def test_reopen_flow_refuses_while_another_flow_is_running(tmp_path: Path) -> No
 def test_latest_flow_returns_the_newest_flow_in_any_status(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "影片", 10, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")["id"])
     assert library.latest_flow(video_id) is None
 
     first = library._create_flow(video_id, "download", {"target_language": "en"})
@@ -348,11 +355,11 @@ def test_upgrade_shows_existing_subtitles_on_videos_with_no_playback(tmp_path: P
     library.initialize()
     cues = [Cue(id="1", start=1, end=2, text="Hello")]
 
-    def video(youtube_id: str) -> str:
-        return str(library.import_video(youtube_id, "old", 10, "url", "{}")["id"])
+    def video(source_key: str) -> str:
+        return str(library.import_video(source_key, "old", 10, "url", "{}")["id"])
 
     translated, unfinished, original_only, chosen = (
-        video(f"{letter}bcdefghijk") for letter in "abcd"
+        video(f"youtube:{letter}bcdefghijk") for letter in "abcd"
     )
     asr = library.create_subtitle_version(translated, "zh", "asr", "asr", cues)
     translation = library.create_subtitle_version(
@@ -372,6 +379,12 @@ def test_upgrade_shows_existing_subtitles_on_videos_with_no_playback(tmp_path: P
         connection.execute(
             "UPDATE videos SET playback_version_id=? WHERE id=?", (str(kept["id"]), chosen)
         )
+        connection.execute("ALTER TABLE videos RENAME COLUMN source_key TO youtube_id")
+        connection.execute("DROP INDEX videos_source_key")
+        connection.execute("CREATE UNIQUE INDEX videos_youtube_id ON videos (youtube_id)")
+        connection.execute(
+            "UPDATE videos SET youtube_id=substr(youtube_id, 9) WHERE youtube_id LIKE 'youtube:%'"
+        )
         connection.execute("PRAGMA user_version = 7")
     upgraded = Library(library.root)
     upgraded.initialize()
@@ -379,3 +392,81 @@ def test_upgrade_shows_existing_subtitles_on_videos_with_no_playback(tmp_path: P
     assert upgraded.get_video(unfinished)["playback_version_id"] is None
     assert upgraded.get_video(original_only)["playback_version_id"] == imported["id"]
     assert upgraded.get_video(chosen)["playback_version_id"] == kept["id"]
+
+
+def test_v9_upgrade_migrates_source_identity_and_export_snapshots(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library")
+    library.initialize()
+    video = library.import_video(
+        "Abc_123-xyz", "影片", 10, "https://www.youtube.com/watch?v=Abc_123-xyz", "{}"
+    )
+    video_id = str(video["id"])
+    metadata = {"youtube_id": "Abc_123-xyz", "title": "影片", "formats": []}
+    export_snapshot = {"youtube_id": "Abc_123-xyz", "title": "影片", "height": 720}
+    export_job = library.create_snapshot_job(video_id, "export", export_snapshot)
+    other_snapshot = {"youtube_id": "preserved", "language": "en"}
+    other_job = library.create_snapshot_job(video_id, "subtitles", other_snapshot)
+    prefixed = library.import_video("youtube:second", "Second", 10, "second", "{}")
+    with sqlite3.connect(library.db_path) as connection:
+        connection.execute(
+            "UPDATE videos SET metadata=? WHERE id=?", (json.dumps(metadata), video_id)
+        )
+        connection.execute("ALTER TABLE videos RENAME COLUMN source_key TO youtube_id")
+        connection.execute("DROP INDEX videos_source_key")
+        connection.execute("CREATE UNIQUE INDEX videos_youtube_id ON videos (youtube_id)")
+        connection.execute("PRAGMA user_version = 9")
+
+    upgraded = Library(library.root)
+    upgraded.initialize()
+    migrated = upgraded.get_video(video_id)
+    assert migrated["source_key"] == "youtube:Abc_123-xyz"
+    assert "youtube_id" not in migrated
+    assert json.loads(str(migrated["metadata"])) == {
+        "source_key": "youtube:Abc_123-xyz",
+        "site": "YouTube",
+        "title": "影片",
+        "formats": [],
+    }
+    assert upgraded.get_video(str(prefixed["id"]))["source_key"] == "youtube:second"
+    assert json.loads(str(upgraded.get_job(str(export_job["id"]))["snapshot"])) == {
+        "source_key": "youtube:Abc_123-xyz",
+        "title": "影片",
+        "height": 720,
+    }
+    assert json.loads(str(upgraded.get_job(str(other_job["id"]))["snapshot"])) == other_snapshot
+    with sqlite3.connect(upgraded.db_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        indexes = {row[1]: row[2] for row in connection.execute("PRAGMA index_list(videos)")}
+        assert indexes["videos_source_key"] == 1
+        assert "videos_youtube_id" not in indexes
+    backups = list(library.root.glob("*.backup-*"))
+    assert len(backups) == 1
+    with sqlite3.connect(backups[0]) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert (
+            connection.execute("SELECT youtube_id FROM videos WHERE id=?", (video_id,)).fetchone()[
+                0
+            ]
+            == "Abc_123-xyz"
+        )
+    upgraded.initialize()
+    assert upgraded.get_video(video_id)["metadata"] == migrated["metadata"]
+    assert list(library.root.glob("*.backup-*")) == backups
+
+
+def test_source_lookup_deduplicates_sites_and_excludes_deleting(tmp_path: Path) -> None:
+    library = Library(tmp_path / "library")
+    library.initialize()
+    url = "https://x.com/example/status/123"
+    video = library.import_video("twitter:456", "X clip", 10, url, "{}")
+    duplicate = library.import_video("twitter:456", "Other title", 10, url, "{}")
+    other_site = library.import_video("youtube:456", "YouTube clip", 10, "other", "{}")
+    assert duplicate["id"] == video["id"]
+    assert other_site["id"] != video["id"]
+    assert library.find_video_by_url(url) == video
+    assert library.find_video_by_source_key("twitter:456") == video
+    assert library.find_video_by_url("missing") is None
+    assert library.find_video_by_source_key("twitter:missing") is None
+    library.mark_deleting(str(video["id"]))
+    assert library.find_video_by_url(url) is None
+    assert library.find_video_by_source_key("twitter:456") is None

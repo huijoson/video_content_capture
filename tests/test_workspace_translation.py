@@ -43,7 +43,7 @@ def setup_translation(tmp_path, count=1):
 
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "影片", 1000, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "影片", 1000, "url", "{}")["id"])
     cues = [Cue(id=f"cue-{i}", start=i, end=i + 0.5, text="English") for i in range(count)]
     source = library.create_subtitle_version(video_id, "en", "original", "import", cues)
     settings = WorkspaceSettings(tmp_path, library.root, gemini_api_key=SecretStr("fake-sentinel"))

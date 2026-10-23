@@ -10,7 +10,7 @@ from video_content_capture.workspace.subtitles import Cue
 def setup_library(tmp_path: Path) -> tuple[Library, str, str]:
     library = Library(tmp_path)
     library.initialize()
-    video = library.import_video("abcdefghijk", "video", 10, "https://youtube.com", "{}")
+    video = library.import_video("youtube:abcdefghijk", "video", 10, "https://youtube.com", "{}")
     version = library.create_subtitle_version(
         str(video["id"]),
         "en",
@@ -85,6 +85,12 @@ def test_v3_migration_preserves_metadata_with_private_backup(tmp_path: Path) -> 
         connection.execute("DROP TABLE qa_messages")
         connection.execute("DROP TABLE conversations")
         connection.execute("ALTER TABLE videos DROP COLUMN last_conversation_id")
+        connection.execute("ALTER TABLE videos RENAME COLUMN source_key TO youtube_id")
+        connection.execute("DROP INDEX videos_source_key")
+        connection.execute("CREATE UNIQUE INDEX videos_youtube_id ON videos (youtube_id)")
+        connection.execute(
+            "UPDATE videos SET youtube_id=substr(youtube_id, 9) WHERE youtube_id LIKE 'youtube:%'"
+        )
         connection.execute("PRAGMA user_version=3")
     library.initialize()
     assert library.get_video(video)["title"] == "video"
@@ -148,7 +154,7 @@ def test_video_without_any_subtitles_still_opens_when_the_pointer_is_dangling(
 ) -> None:
     library = Library(tmp_path)
     library.initialize()
-    video = library.import_video("abcdefghijk", "video", 10, "https://youtube.com", "{}")
+    video = library.import_video("youtube:abcdefghijk", "video", 10, "https://youtube.com", "{}")
     video_id = str(video["id"])
     with library._connect() as connection:
         connection.execute(

@@ -110,7 +110,7 @@ def test_queue_dispatches_non_media_job_through_same_gate(tmp_path: Path) -> Non
     adapter = FakeAdapter()
     source = adapter.source
     video = library.import_video(
-        source.youtube_id,
+        source.source_key,
         source.title,
         source.duration,
         source.source_url,

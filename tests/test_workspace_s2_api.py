@@ -9,8 +9,8 @@ from video_content_capture.workspace.app import create_app
 from video_content_capture.workspace.config import load_settings
 from video_content_capture.workspace.downloads import DownloadService
 from video_content_capture.workspace.jobs import MediaQueue
+from video_content_capture.workspace.source import DownloadedMedia, SourceMetadata, parse_metadata
 from video_content_capture.workspace.storage import Library
-from video_content_capture.workspace.youtube import DownloadedMedia, SourceMetadata, parse_metadata
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +43,7 @@ class FakeAdapter:
         self.source = parse_metadata(
             {
                 "id": "abcdefghijk",
+                "extractor_key": "Youtube",
                 "title": "離線影片",
                 "duration": 10,
                 "formats": [
@@ -56,7 +57,9 @@ class FakeAdapter:
         self.callback = lambda: None
 
     def query(self, url: str, cancel: Event | None = None) -> SourceMetadata:
-        return self.source
+        return self.source.model_copy(
+            update={"source_key": f"youtube:{url.rsplit('=', 1)[-1]}", "source_url": url}
+        )
 
     def download(self, source, format_id, audio_id, directory, cancel, progress, stages=None):
         self.downloads += 1
@@ -74,7 +77,7 @@ def setup_queue(tmp_path):
     adapter = FakeAdapter()
     source = adapter.source
     video = library.import_video(
-        source.youtube_id,
+        source.source_key,
         source.title,
         source.duration,
         source.source_url,
@@ -385,7 +388,7 @@ def test_source_error_failure_is_logged_with_its_code(
 ) -> None:
     import logging
 
-    from video_content_capture.workspace.youtube import SourceError
+    from video_content_capture.workspace.source import SourceError
 
     library, adapter, queue, job = staging_queue(tmp_path)
     adapter.failure = SourceError("source_unavailable", "來源不支援／無法取得")
@@ -409,3 +412,62 @@ def test_published_download_removes_its_stage_files(tmp_path: Path) -> None:
     assert len(library.assets(str(job["video_id"]))) == 1
     assert stage_files(library, job) == []
     assert library.stage_records(str(job["id"])) == []
+
+
+def test_x_query_imports_and_reuses_url_and_source_identity(tmp_path: Path) -> None:
+    url = "https://x.com/historyinmemes/status/1790637656616943991"
+
+    class XAdapter(FakeAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.queries = 0
+            self.source = parse_metadata(
+                {
+                    "id": "1790637589910654976",
+                    "extractor_key": "Twitter",
+                    "webpage_url": url,
+                    "title": "X video",
+                    "duration": 10,
+                    "formats": [
+                        {"format_id": "http-2176", "height": 720},
+                        {
+                            "format_id": "hls-716",
+                            "height": 720,
+                            "vcodec": "avc1.64001F",
+                            "acodec": "none",
+                        },
+                        {"format_id": "hls-audio-128000-Audio", "vcodec": "none"},
+                    ],
+                },
+                url,
+            )
+
+        def query(self, url: str, cancel: Event | None = None) -> SourceMetadata:
+            self.queries += 1
+            return self.source
+
+    adapter = XAdapter()
+    with TestClient(
+        create_app(load_settings(tmp_path), adapter), base_url="http://127.0.0.1:8765"
+    ) as client:
+        headers = {"Origin": "http://127.0.0.1:8765"}
+        first = client.post("/api/query", json={"url": url}, headers=headers)
+        assert first.status_code == 200
+        video = first.json()
+        assert video["source_key"] == "twitter:1790637589910654976"
+        assert video["metadata"]["site"] == "X"
+        second = client.post("/api/query", json={"url": url + "#fragment"}, headers=headers)
+        assert second.status_code == 200
+        assert second.json()["id"] == video["id"]
+        assert adapter.queries == 1
+        alias = client.post(
+            "/api/query", json={"url": url.replace("x.com", "twitter.com")}, headers=headers
+        )
+        assert alias.status_code == 200
+        assert alias.json()["id"] == video["id"]
+        assert adapter.queries == 2
+        refreshed = client.post("/api/query", json={"url": url, "refresh": True}, headers=headers)
+        assert refreshed.status_code == 200
+        assert refreshed.json()["id"] == video["id"]
+        assert adapter.queries == 3
+        assert len(client.get("/api/videos").json()) == 1

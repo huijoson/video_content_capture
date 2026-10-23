@@ -71,7 +71,7 @@ def test_missing_key_status_and_semantic_empty_page(tmp_path: Path) -> None:
             "製作相容預覽",
         ):
             assert text in html
-        assert '<label for="youtube-url">' in html
+        assert '<label for="source-url">' in html
         assert 'type="password"' not in html
         assert "disabled" in html
         assert client.get("/static/workspace.css").status_code == 200

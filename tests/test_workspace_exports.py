@@ -11,7 +11,7 @@ from video_content_capture.workspace.exports import (
     export_filename,
     select_tracks,
 )
-from video_content_capture.workspace.youtube import SourceError
+from video_content_capture.workspace.source import SourceError
 
 
 def track(identifier: str, language: str = "en", name: str = "Original") -> ExportTrack:
@@ -110,7 +110,7 @@ def setup_service(tmp_path: Path):
 
     library = Library(tmp_path / "library")
     library.initialize()
-    video = library.import_video("abcdefghijk", "台灣 / 影片", 1, "url", "{}")
+    video = library.import_video("youtube:abcdefghijk", "台灣 / 影片", 1, "url", "{}")
     video_id = str(video["id"])
     library.video_dir(video_id)
     source = library.root / "videos" / video_id / "source" / "media.mp4"
@@ -213,7 +213,7 @@ def test_cancel_retry_late_export_cannot_publish(tmp_path: Path) -> None:
 
 
 def test_mp4_failure_selects_mkv_and_keeps_language_region(tmp_path: Path) -> None:
-    from video_content_capture.workspace.youtube import run_process
+    from video_content_capture.workspace.source import run_process
 
     source = tmp_path / "source.mkv"
     subprocess.run(

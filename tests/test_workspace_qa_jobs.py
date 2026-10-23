@@ -17,7 +17,7 @@ from video_content_capture.workspace.subtitles import Cue
 def setup_qa(tmp_path: Path):
     library = Library(tmp_path / "library")
     library.initialize()
-    video_id = str(library.import_video("abcdefghijk", "影片", 100, "url", "{}")["id"])
+    video_id = str(library.import_video("youtube:abcdefghijk", "影片", 100, "url", "{}")["id"])
     source = library.create_subtitle_version(
         video_id,
         "en",
@@ -221,7 +221,7 @@ def test_race_video_deleting_then_reimport_old_reply_is_not_written(tmp_path):
     def delete_video_and_reimport():
         library.mark_deleting(video_id)
         try:
-            library.import_video("abcdefghijk", "影片", 100, "url", "{}")
+            library.import_video("youtube:abcdefghijk", "影片", 100, "url", "{}")
         except ValueError as error:
             reimport_errors.append(error)
 
@@ -274,7 +274,7 @@ def test_race_switch_video_does_not_attach_reply_to_other_video(tmp_path):
     other = []
 
     def open_other_video():
-        video = library.import_video("bbbbbbbbbbb", "其他", 100, "url", "{}")
+        video = library.import_video("youtube:bbbbbbbbbbb", "其他", 100, "url", "{}")
         source = library.create_subtitle_version(
             str(video["id"]),
             "en",
@@ -347,7 +347,7 @@ def test_race_purged_video_reimported_with_new_owner_never_receives_old_reply(tm
             connection.execute("DELETE FROM subtitle_versions WHERE video_id=?", (video_id,))
             connection.execute("DELETE FROM jobs WHERE video_id=?", (video_id,))
             connection.execute("DELETE FROM videos WHERE id=?", (video_id,))
-        video = library.import_video("abcdefghijk", "影片", 100, "url", "{}")
+        video = library.import_video("youtube:abcdefghijk", "影片", 100, "url", "{}")
         source = library.create_subtitle_version(
             str(video["id"]),
             "en",

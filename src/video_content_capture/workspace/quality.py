@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from video_content_capture.workspace.youtube import (
+from video_content_capture.workspace.source import (
     AudioTrack,
     SourceMetadata,
     VideoFormat,

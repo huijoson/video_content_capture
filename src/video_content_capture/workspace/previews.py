@@ -21,8 +21,8 @@ from video_content_capture.workspace.publication import (
     ArtifactPublisher,
     PublishedArtifact,
 )
+from video_content_capture.workspace.source import SourceError, run_process
 from video_content_capture.workspace.storage import Library, Record
-from video_content_capture.workspace.youtube import SourceError, run_process
 
 MAX_PREVIEW_HEIGHT = 720
 

@@ -227,3 +227,13 @@ def test_settings_that_do_not_apply_are_not_drawn_as_fields() -> None:
     assert 'element("retranslate").hidden = !existing' in script
     # The version name follows the file the reader picked, and stops following once it is edited.
     assert "versionNameEdited" in script
+
+
+def test_source_url_copy_and_site_metadata() -> None:
+    html = (STATIC / "index.html").read_text()
+    script = (STATIC / "workspace.js").read_text()
+    assert "<title>影片工作區</title>" in html
+    assert '<label for="source-url">影片網址（YouTube、X 等）</label>' in html
+    assert "youtube-url" not in html + script
+    assert "${metadata.site}" in script
+    assert "YouTube 暫時拒絕" not in script

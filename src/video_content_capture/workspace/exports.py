@@ -30,9 +30,9 @@ from video_content_capture.workspace.publication import (
     ArtifactPublisher,
     PublishedArtifact,
 )
+from video_content_capture.workspace.source import SourceError, run_process
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.subtitles import Cue
-from video_content_capture.workspace.youtube import SourceError, run_process
 
 ProcessRunner = Callable[[list[str], Event], str]
 ProgressCallback = Callable[[float | None], None]
@@ -522,7 +522,7 @@ class ExportSnapshot(BaseModel):
     container: Literal["mp4", "mkv"]
     tracks: list[SnapshotTrack] = Field(min_length=1, max_length=2)
     title: str = Field(max_length=4096)
-    youtube_id: str = Field(pattern=r"^[A-Za-z0-9_-]{11}$")
+    source_key: str = Field(pattern=r"^[a-z0-9]+:[A-Za-z0-9_.-]{1,128}$")
     quality: str = Field(min_length=1, max_length=1000)
     # Snapshots confirmed before burned-in export existed are selectable tracks.
     subtitle_form: SubtitleForm = "tracks"
@@ -662,7 +662,7 @@ class ExportService:
                 for t in resolved.tracks
             ],
             title=str(resolved.video["title"]),
-            youtube_id=str(resolved.video["youtube_id"]),
+            source_key=str(resolved.video["source_key"]),
             quality=self._quality(resolved.video, resolved.asset),
             subtitle_form=subtitle_form,
         ).model_dump()
@@ -822,7 +822,7 @@ class ExportService:
                 export_id = uuid4().hex
                 filename = export_filename(
                     snapshot.title,
-                    snapshot.youtube_id,
+                    snapshot.source_key,
                     snapshot.quality,
                     export_id,
                     snapshot.container,

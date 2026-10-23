@@ -11,8 +11,8 @@ from typing import BinaryIO
 from uuid import uuid4
 
 from video_content_capture.redaction import scrub_text
+from video_content_capture.workspace.source import DownloadStages, SourceError
 from video_content_capture.workspace.storage import Library, Record
-from video_content_capture.workspace.youtube import DownloadStages, SourceError
 
 logger = logging.getLogger("vcc.workspace")
 FAILURE_MESSAGE_LIMIT = 300

@@ -28,9 +28,9 @@ from video_content_capture.workspace.burned import (
 )
 from video_content_capture.workspace.config import load_settings
 from video_content_capture.workspace.exports import ExportTrack, MediaExporter
+from video_content_capture.workspace.source import SourceError
 from video_content_capture.workspace.storage import Library
 from video_content_capture.workspace.subtitles import Cue
-from video_content_capture.workspace.youtube import SourceError
 
 ORIGIN = {"Origin": "http://127.0.0.1:8765"}
 
@@ -420,7 +420,9 @@ def test_migration_marks_existing_artifacts_as_tracks(tmp_path: Path) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
     adapter = FakeAdapter()
-    video = library.import_video("abcdefghijk", "old", 1, "url", adapter.source.model_dump_json())
+    video = library.import_video(
+        "youtube:abcdefghijk", "old", 1, "url", adapter.source.model_dump_json()
+    )
     with sqlite3.connect(library.db_path) as connection:
         connection.execute("ALTER TABLE export_artifacts DROP COLUMN subtitle_form")
         connection.execute(
@@ -431,6 +433,12 @@ def test_migration_marks_existing_artifacts_as_tracks(tmp_path: Path) -> None:
         connection.execute(
             "INSERT INTO export_artifacts VALUES (?,?,?,?,?,?,?)",
             ("old", video["id"], "job", "videos/x/exports/old.mp4", "mp4", "{}", "c"),
+        )
+        connection.execute("ALTER TABLE videos RENAME COLUMN source_key TO youtube_id")
+        connection.execute("DROP INDEX videos_source_key")
+        connection.execute("CREATE UNIQUE INDEX videos_youtube_id ON videos (youtube_id)")
+        connection.execute(
+            "UPDATE videos SET youtube_id=substr(youtube_id, 9) WHERE youtube_id LIKE 'youtube:%'"
         )
         connection.execute("PRAGMA user_version=5")
     settings = replace(load_settings(tmp_path), library_dir=library.root)

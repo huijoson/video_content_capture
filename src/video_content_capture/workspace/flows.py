@@ -22,6 +22,7 @@ from video_content_capture.workspace.quality import (
     default_resolution,
     resolve_source,
 )
+from video_content_capture.workspace.source import SourceError, SourceMetadata
 from video_content_capture.workspace.storage import Library, Record
 from video_content_capture.workspace.subtitle_catalog import SubtitleCatalog
 from video_content_capture.workspace.subtitles import (
@@ -30,7 +31,6 @@ from video_content_capture.workspace.subtitles import (
     validate_language,
 )
 from video_content_capture.workspace.translation import TranslationService
-from video_content_capture.workspace.youtube import SourceError, SourceMetadata
 
 # The confirm screen names the expected original-subtitle source in plain Chinese.
 ORIGINAL_SOURCE_LABELS: Record = {
@@ -150,7 +150,7 @@ def bilingual_burning_supported() -> bool:
                 SnapshotTrack(version_id="origin", language="en", name="original"),
             ],
             title="probe",
-            youtube_id="abcdefghijk",
+            source_key="youtube:abcdefghijk",
             quality="1080p-30fps",
             subtitle_form="burned",
         )

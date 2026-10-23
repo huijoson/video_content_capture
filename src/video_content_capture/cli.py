@@ -603,7 +603,7 @@ def serve(
     translation_model: str | None = typer.Option(None, help="Gemini translation model ID."),
     qa_model: str | None = typer.Option(None, help="Gemini Q&A model ID."),
 ) -> None:
-    """Start the local YouTube workspace."""
+    """Start the local video workspace."""
     import uvicorn
 
     from video_content_capture.workspace.app import create_app

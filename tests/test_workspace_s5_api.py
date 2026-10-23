@@ -13,7 +13,7 @@ from tests.test_workspace_s3_api import ORIGIN
 from tests.test_workspace_s4_api import SECRET, FakeQA, import_source, query_video
 from video_content_capture.workspace.app import create_app
 from video_content_capture.workspace.config import WorkspaceSettings
-from video_content_capture.workspace.youtube import DownloadedMedia, SourceError
+from video_content_capture.workspace.source import DownloadedMedia, SourceError
 
 
 @pytest.fixture(autouse=True)

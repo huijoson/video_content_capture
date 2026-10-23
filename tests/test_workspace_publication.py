@@ -10,7 +10,7 @@ from video_content_capture.workspace.storage import Library
 def setup_job(tmp_path: Path):
     library = Library(tmp_path / "library")
     library.initialize()
-    video = library.import_video("abcdefghijk", "影片", 10, "url", "{}")
+    video = library.import_video("youtube:abcdefghijk", "影片", 10, "url", "{}")
     job = library.create_job(str(video["id"]), "v", "a")
     return library, str(video["id"]), str(job["id"])
 

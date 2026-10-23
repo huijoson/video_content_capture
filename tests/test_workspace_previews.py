@@ -14,9 +14,9 @@ import pytest
 
 from video_content_capture.workspace.jobs import checksum
 from video_content_capture.workspace.previews import PreviewEncoder, PreviewService, moov_first
+from video_content_capture.workspace.source import SourceError, run_process
 from video_content_capture.workspace.storage import Library
 from video_content_capture.workspace.subtitles import Cue
-from video_content_capture.workspace.youtube import SourceError, run_process
 
 needs_ffmpeg = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
@@ -184,7 +184,9 @@ class FakeEncoder:
 def setup_preview(tmp_path: Path, playable: bool = False):
     library = Library(tmp_path / "library")
     library.initialize()
-    video = library.import_video("abcdefghijk", "影片", 10, "https://youtu.be/abcdefghijk", "{}")
+    video = library.import_video(
+        "youtube:abcdefghijk", "影片", 10, "https://youtu.be/abcdefghijk", "{}"
+    )
     video_id = str(video["id"])
     root = library.video_dir(video_id)
     (root / "source" / "asset.mkv").write_bytes(b"source")

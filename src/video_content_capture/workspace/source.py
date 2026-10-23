@@ -47,6 +47,7 @@ class AudioTrack(BaseModel):
     original: bool
     default: bool
     size: int | None = None
+    audio_only: bool = True
 
 
 # YouTube keys its automatic recognition of the spoken language `<lang>-orig`; every other
@@ -63,7 +64,8 @@ class SubtitleTrack(BaseModel):
 
 class SourceMetadata(BaseModel):
     model_config = ConfigDict(frozen=True)
-    youtube_id: str
+    source_key: str
+    site: str
     source_url: str
     title: str
     duration: float
@@ -103,7 +105,7 @@ class DownloadStages(Protocol):
     def save(self, name: str, format_id: str, path: Path) -> None: ...
 
 
-class YoutubeAdapter(Protocol):
+class SourceAdapter(Protocol):
     def query(self, url: str, cancel: Event | None = None) -> SourceMetadata: ...
 
     def download_subtitle(
@@ -122,15 +124,16 @@ class YoutubeAdapter(Protocol):
     ) -> DownloadedMedia: ...
 
 
-def parse_youtube_url(url: str) -> tuple[str, str]:
-    """Drop all unneeded URL data; never accept credentials or extractor redirects."""
-    invalid = SourceError("invalid_url", "請輸入單支 YouTube 影片網址")
+def normalize_source_url(url: str) -> str:
+    """Normalize single-video YouTube URLs and reject unsafe URL forms."""
+    invalid = SourceError("invalid_url", "請輸入單支影片網址")
     if not url or any(character.isspace() for character in url):
         raise invalid
     try:
         parsed = urlsplit(url)
         if (
             parsed.scheme not in {"https", "http"}
+            or not parsed.hostname
             or parsed.username is not None
             or parsed.password is not None
             or parsed.port not in {None, 80, 443}
@@ -151,12 +154,12 @@ def parse_youtube_url(url: str) -> tuple[str, str]:
                     raise invalid
                 video_id = parts[2]
         else:
-            raise invalid
+            return parsed._replace(fragment="").geturl()
     except ValueError:
         raise invalid from None
     if _ID.fullmatch(video_id) is None:
         raise invalid
-    return video_id, f"https://www.youtube.com/watch?v={video_id}"
+    return f"https://www.youtube.com/watch?v={video_id}"
 
 
 def _number(value: object) -> float | None:
@@ -177,10 +180,15 @@ def _string(value: object, fallback: str = "") -> str:
 
 
 def parse_metadata(info: dict[str, object], url: str) -> SourceMetadata:
-    video_id, canonical = parse_youtube_url(url)
+    canonical = normalize_source_url(url)
+    video_id = info.get("id")
+    extractor = info.get("extractor_key")
     unavailable = SourceError("source_unavailable", "來源不支援／無法取得")
     if (
-        info.get("id") != video_id
+        not isinstance(video_id, str)
+        or re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", video_id) is None
+        or not isinstance(extractor, str)
+        or re.fullmatch(r"[A-Za-z0-9]+", extractor) is None
         or info.get("is_live") is True
         or info.get("live_status") in {"is_live", "is_upcoming", "post_live"}
         or info.get("availability") in {"private", "needs_auth", "premium_only", "subscriber_only"}
@@ -191,6 +199,13 @@ def parse_metadata(info: dict[str, object], url: str) -> SourceMetadata:
     raw_formats = info.get("formats")
     if duration is None or duration <= 0 or not isinstance(raw_formats, list):
         raise unavailable
+    assert isinstance(video_id, str) and isinstance(extractor, str)
+    webpage_url = info.get("webpage_url")
+    if isinstance(webpage_url, str):
+        try:
+            canonical = normalize_source_url(webpage_url)
+        except SourceError:
+            pass
     language = _string(info.get("language")) or None
     formats: list[VideoFormat] = []
     tracks: list[AudioTrack] = []
@@ -201,8 +216,8 @@ def parse_metadata(info: dict[str, object], url: str) -> SourceMetadata:
         identifier = _string(item.get("format_id"))
         if _FORMAT_ID.fullmatch(identifier) is None or item.get("has_drm") is True:
             continue
-        video_codec = _string(item.get("vcodec"), "none")
-        audio_codec = _string(item.get("acodec"), "none")
+        video_codec = _string(item.get("vcodec"))
+        audio_codec = _string(item.get("acodec"))
         height = _number(item.get("height"))
         if video_codec != "none" and height and height.is_integer():
             formats.append(
@@ -214,7 +229,7 @@ def parse_metadata(info: dict[str, object], url: str) -> SourceMetadata:
                     size=_size(item),
                 )
             )
-        if audio_codec != "none":
+        if audio_codec != "none" and (audio_codec or video_codec in {"none", ""}):
             track_language = _string(item.get("language")) or "未知"
             note = _string(item.get("format_note")).lower()
             original = "original" in note and "dub" not in note
@@ -225,6 +240,7 @@ def parse_metadata(info: dict[str, object], url: str) -> SourceMetadata:
                     language=track_language,
                     codec=audio_codec,
                     original=original,
+                    audio_only=video_codec == "none",
                     default=default,
                     size=_size(item),
                 )
@@ -241,7 +257,8 @@ def parse_metadata(info: dict[str, object], url: str) -> SourceMetadata:
     original_tracks = [track for track in tracks if track.original]
     selected_audio = next((track for track in reversed(original_tracks) if track.default), None)
     if selected_audio is None:
-        selected_audio = (original_tracks or tracks)[-1]
+        audio_only = [track for track in tracks if track.audio_only]
+        selected_audio = (original_tracks or audio_only or tracks)[-1]
     subtitles: list[SubtitleTrack] = []
     for key, automatic in (("subtitles", False), ("automatic_captions", True)):
         raw_subtitles = info.get(key)
@@ -267,7 +284,8 @@ def parse_metadata(info: dict[str, object], url: str) -> SourceMetadata:
     if language is None and selected_audio.original and selected_audio.language != "未知":
         language = selected_audio.language
     return SourceMetadata(
-        youtube_id=video_id,
+        source_key=f"{extractor.lower()}:{video_id}",
+        site={"Youtube": "YouTube", "Twitter": "X"}.get(extractor, extractor),
         source_url=canonical,
         title=_string(info.get("title"), video_id),
         duration=duration,
@@ -287,7 +305,7 @@ _TRANSIENT_DELAYS = (1.0, 3.0)
 _HELPER_ERRORS = {
     # The provider's own words never cross this boundary; the helper names one of these.
     "temporary": ("source_busy", "來源暫時無法取得，請稍後重試"),
-    "blocked": ("source_blocked", "YouTube 暫時拒絕存取此影片，請稍後重試"),
+    "blocked": ("source_blocked", "來源網站暫時拒絕存取此影片，請稍後重試"),
     "format_unavailable": ("format_unavailable", "來源格式已消失，請重新選擇畫質／音軌"),
     "unavailable": ("source_unavailable", "來源不支援／無法取得"),
 }
@@ -418,7 +436,7 @@ def _codec(codec: str) -> str:
     return codec
 
 
-def _verify_stage(path: Path, name: str, selected: VideoFormat | AudioTrack, cancel: Event) -> None:
+def _verify_stage(path: Path, name: str, selected: VideoFormat | AudioTrack, cancel: Event) -> str:
     probe = run_process(
         ["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
         cancel,
@@ -441,7 +459,9 @@ def _verify_stage(path: Path, name: str, selected: VideoFormat | AudioTrack, can
             ),
             None,
         )
-        if stream is None or stream.get("codec_name") != _codec(selected.codec):
+        if stream is None or (
+            selected.codec and stream.get("codec_name") != _codec(selected.codec)
+        ):
             raise ValueError
         if isinstance(selected, VideoFormat):
             if stream.get("height") != selected.height:
@@ -452,6 +472,10 @@ def _verify_stage(path: Path, name: str, selected: VideoFormat | AudioTrack, can
                     raise ValueError
         if path.stat().st_size == 0:
             raise ValueError
+        codec = stream.get("codec_name")
+        if not isinstance(codec, str) or not codec:
+            raise ValueError
+        return codec
     except (ValueError, TypeError, ZeroDivisionError, OSError):
         raise SourceError("invalid_media", "下載產物驗證失敗") from None
 
@@ -486,7 +510,7 @@ class YtDlpAdapter:
         return self._extract(request, cancel)
 
     def query(self, url: str, cancel: Event | None = None) -> SourceMetadata:
-        _, canonical = parse_youtube_url(url)
+        canonical = normalize_source_url(url)
         return parse_metadata(
             self._api({"mode": "query", "url": canonical}, cancel or Event()), canonical
         )
@@ -533,9 +557,12 @@ class YtDlpAdapter:
             raise SourceError("format_unavailable", "來源格式已消失，請重新選擇畫質／音軌")
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         paths: list[Path] = []
+        stage_codecs: list[str] = []
         for name, identifier in (("video", format_id), ("audio", audio_id)):
             progress(f"downloading_{name}", None, None)
             path = stages.load(name, identifier) if stages is not None else None
+            if name == "audio" and audio_id == format_id:
+                path = paths[0]
             if path is None:
                 result = self._api(
                     {
@@ -549,15 +576,16 @@ class YtDlpAdapter:
                 path = Path(_string(result.get("path"))).resolve()
                 if not path.is_file() or path.parent != directory.resolve():
                     raise SourceError("invalid_media", "下載產物驗證失敗")
-                _verify_stage(path, name, video if name == "video" else audio, cancel)
+                codec = _verify_stage(path, name, video if name == "video" else audio, cancel)
                 if stages is not None:
                     if cancel.is_set():
                         raise SourceError("cancelled", "工作已取消")
                     stages.save(name, identifier, path)
             else:
-                _verify_stage(path, name, video if name == "video" else audio, cancel)
+                codec = _verify_stage(path, name, video if name == "video" else audio, cancel)
             paths.append(path)
-        browser_playable = _codec(video.codec) == "h264" and _codec(audio.codec) == "aac"
+            stage_codecs.append(codec)
+        browser_playable = stage_codecs == ["h264", "aac"]
         container = "mp4" if browser_playable else "mkv"
         output = directory / f"source.{container}"
         progress("merging", None, None)
@@ -596,9 +624,15 @@ class YtDlpAdapter:
                 for stream in info["streams"]
                 if isinstance(stream, dict)
             }
-            if codecs.get("video") != _codec(video.codec) or codecs.get("audio") != _codec(
-                audio.codec
-            ):
+            for name, selected in (("video", video), ("audio", audio)):
+                if selected.codec and codecs.get(name) != _codec(selected.codec):
+                    raise ValueError
+                if not isinstance(codecs.get(name), str) or not codecs[name]:
+                    raise ValueError
+            video_codec = str(codecs["video"])
+            audio_codec = str(codecs["audio"])
+            browser_playable = video_codec == "h264" and audio_codec == "aac"
+            if browser_playable != (container == "mp4"):
                 raise ValueError
             raw_container = info.get("format")
             if not isinstance(raw_container, dict):
@@ -628,7 +662,7 @@ class YtDlpAdapter:
         return DownloadedMedia(
             path=output,
             container=container,
-            video_codec=_codec(video.codec),
-            audio_codec=_codec(audio.codec),
+            video_codec=video_codec,
+            audio_codec=audio_codec,
             browser_playable=browser_playable,
         )

@@ -26,11 +26,11 @@ from video_content_capture.workspace.flows import (
     FlowService,
     FlowSnapshot,
 )
+from video_content_capture.workspace.source import SourceError, SourceMetadata, parse_metadata
 from video_content_capture.workspace.storage import Library
 from video_content_capture.workspace.subtitle_catalog import SubtitleCatalog
 from video_content_capture.workspace.subtitles import Cue
 from video_content_capture.workspace.translation import TranslationResponse
-from video_content_capture.workspace.youtube import SourceError, SourceMetadata, parse_metadata
 
 VTT = b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello world\n"
 
@@ -64,6 +64,7 @@ class FlowAdapter(FakeAdapter):
         self.source = parse_metadata(
             {
                 "id": "abcdefghijk",
+                "extractor_key": "Youtube",
                 "title": "離線影片",
                 "duration": 10,
                 "language": language,
@@ -552,11 +553,13 @@ def test_cancelling_a_queued_stage_ends_the_flow_instead_of_wedging_it(tmp_path:
         ).json()
         # An unrelated download holds the lane, so the flow's first stage stays `queued`.
         other = library.import_video(
-            "lmnopqrstuv",
+            "youtube:lmnopqrstuv",
             "第二部",
             10,
             "https://youtu.be/lmnopqrstuv",
-            adapter.source.model_copy(update={"youtube_id": "lmnopqrstuv"}).model_dump_json(),
+            adapter.source.model_copy(
+                update={"source_key": "youtube:lmnopqrstuv"}
+            ).model_dump_json(),
         )
         blocking = client.post(
             f"/api/videos/{other['id']}/jobs",
@@ -637,11 +640,13 @@ def test_rejected_retry_and_cancel_leave_the_flow_untouched(tmp_path: Path) -> N
         # The fake adapter answers the same metadata for any URL, so the second video has
         # to be imported directly; that is the pattern the existing cancel test uses.
         other = library.import_video(
-            "lmnopqrstuv",
+            "youtube:lmnopqrstuv",
             "第二部",
             10,
             "https://youtu.be/lmnopqrstuv",
-            adapter.source.model_copy(update={"youtube_id": "lmnopqrstuv"}).model_dump_json(),
+            adapter.source.model_copy(
+                update={"source_key": "youtube:lmnopqrstuv"}
+            ).model_dump_json(),
         )
         blocking = client.post(
             f"/api/videos/{other['id']}/jobs",
@@ -1061,7 +1066,7 @@ def test_acquired_source_uses_the_recorded_result_and_keeps_the_old_scan_fallbac
 ) -> None:
     library = Library(tmp_path / "library")
     library.initialize()
-    video = library.import_video("abcdefghijk", "one", 10, "https://youtube.com", "{}")
+    video = library.import_video("youtube:abcdefghijk", "one", 10, "https://youtube.com", "{}")
     video_id = str(video["id"])
     first = library.create_subtitle_version(
         video_id, "en", "first", "platform_manual", [Cue(id="one", start=1, end=2, text="a")]

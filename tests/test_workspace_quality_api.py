@@ -15,7 +15,7 @@ from video_content_capture.workspace.quality import (
     default_resolution,
     resolve_source,
 )
-from video_content_capture.workspace.youtube import DownloadedMedia, SourceMetadata, parse_metadata
+from video_content_capture.workspace.source import DownloadedMedia, SourceMetadata, parse_metadata
 
 URL = "https://youtu.be/abcdefghijk"
 
@@ -39,7 +39,13 @@ FORMATS: list[dict[str, object]] = [
 
 
 def source(formats: list[dict[str, object]] = FORMATS) -> SourceMetadata:
-    info = {"id": "abcdefghijk", "title": "畫質測試", "duration": 10, "language": "ja"}
+    info = {
+        "id": "abcdefghijk",
+        "extractor_key": "Youtube",
+        "title": "畫質測試",
+        "duration": 10,
+        "language": "ja",
+    }
     return parse_metadata({**info, "formats": formats}, URL)
 
 

@@ -60,7 +60,7 @@ const errorLabels = {
   media_failed: "影音下載、合併或驗證失敗，請檢查來源與本機媒體工具後重試。",
   source_unavailable: "來源不支援／無法取得，請確認影片非直播且無須登入，再重試。",
   source_busy: "來源暫時無法取得（連線中斷或服務暫時無回應），已自動重試；請稍後按「重試流程」。",
-  source_blocked: "YouTube 暫時拒絕存取此影片（可能是機器人檢查或流量限制）；請稍後按「重試流程」。",
+  source_blocked: "來源網站暫時拒絕存取此影片（可能是機器人檢查或流量限制）；請稍後按「重試流程」。",
   container_confirmation_required: "MP4 封裝失敗；來源與字幕已保留。請在匯出區改選 MKV，重新確認摘要並建立匯出工作。",
   source_language_unknown: "原語系未知；請從平台字幕選單選擇人工或自動字幕，再取得所選字幕。",
   subtitle_unavailable: "字幕已消失或無法取得，請重新查詢並選擇平台字幕；不會回退辨識。",
@@ -551,8 +551,8 @@ function renderVideo(video, preserveSelection = false) {
   const severalAssets = assets.length > 1;
   element("media-asset-field").hidden = !severalAssets;
   element("video-source").textContent = severalAssets
-    ? `時長：${formatDuration(video.duration)} · YouTube`
-    : `時長：${formatDuration(video.duration)} · ${preferredAsset ? `已保存 ${assetLabel(preferredAsset)}` : "尚無影音"}`;
+    ? `時長：${formatDuration(video.duration)} · ${metadata.site}`
+    : `時長：${formatDuration(video.duration)} · ${metadata.site} · ${preferredAsset ? `已保存 ${assetLabel(preferredAsset)}` : "尚無影音"}`;
   renderPlayback(video);
   renderLibrary();
   renderSubtitles(video, preserveSelection && sameVideo);
@@ -952,7 +952,7 @@ element("import-form").addEventListener("submit", async (event) => {
   queryController = new AbortController();
   element("cancel-query").hidden = false;
   try {
-    const video = await request("/api/query", "POST", { url: element("youtube-url").value.trim() }, queryController.signal);
+    const video = await request("/api/query", "POST", { url: element("source-url").value.trim() }, queryController.signal);
     if (generation !== opening) return;
     await savePosition(true);
     renderVideo(video);
@@ -970,8 +970,8 @@ element("import-form").addEventListener("submit", async (event) => {
   }
 });
 element("cancel-query").addEventListener("click", () => queryController?.abort());
-element("youtube-url").addEventListener("input", (event) => {
-  if (event.inputType === "insertFromPaste" && element("youtube-url").checkValidity()) {
+element("source-url").addEventListener("input", (event) => {
+  if (event.inputType === "insertFromPaste" && element("source-url").checkValidity()) {
     element("import-form").requestSubmit();
   }
 });

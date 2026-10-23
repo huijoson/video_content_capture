@@ -18,8 +18,8 @@ from video_content_capture.workspace.publication import (
     ArtifactPublisher,
     PublishedArtifact,
 )
+from video_content_capture.workspace.source import SourceAdapter, SourceError, SourceMetadata
 from video_content_capture.workspace.storage import Library, Record
-from video_content_capture.workspace.youtube import SourceError, SourceMetadata, YoutubeAdapter
 
 
 class DownloadService:
@@ -28,7 +28,7 @@ class DownloadService:
     def __init__(
         self,
         library: Library,
-        adapter: YoutubeAdapter,
+        adapter: SourceAdapter,
         publisher: ArtifactPublisher | None = None,
     ) -> None:
         self.library = library
