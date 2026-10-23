@@ -1,6 +1,6 @@
-# YouTube workspace verification map
+# Video workspace verification map
 
-This directory is the maintained source for verifying the user-facing behavior of the local YouTube workspace. Read the index before driving the app, then use the matching feature file as the recipe.
+This directory is the maintained source for verifying the user-facing behavior of the local video workspace. Read the index before driving the app, then use the matching feature file as the recipe.
 
 ## Baseline preconditions
 
@@ -23,7 +23,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 ## Proof and skip reporting
 
 - Capture the user action and the resulting state, not only the final screen.
-- UI proof includes an ARIA snapshot and a full-page screenshot with `YouTube 影片工作區` visible.
+- UI proof includes an ARIA snapshot and a full-page screenshot with `影片工作區` visible.
 - Mutation proof includes `control-vcc read` of the stored rows.
 - Record the feature ID and entry point used with every artifact.
 - Report an unreachable path with the attempted command and the unmet precondition.

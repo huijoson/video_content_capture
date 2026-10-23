@@ -27,7 +27,7 @@ Preconditions:
 - **Query with nothing saved.** Type a title that is not saved. Run `control-vcc browser fill --role searchbox --name "搜尋標題" --value "不存在的標題"`. The status stays `尚無影片。` and `#library-empty` stays visible.
 - **Clear the query.** Run `control-vcc browser fill --role searchbox --name "搜尋標題" --value ""`. The status is still `尚無影片。`.
 - **Stored rows.** Run `control-vcc read /api/videos`. The body is `[]`.
-- **Proof.** Run `control-vcc browser snapshot --aria --path library/empty.aria.txt` and `control-vcc browser screenshot --path library/empty.png`. Both artifacts show `YouTube 影片工作區`, `Gemini 未設定`, and `尚無影片。`.
+- **Proof.** Run `control-vcc browser snapshot --aria --path library/empty.aria.txt` and `control-vcc browser screenshot --path library/empty.png`. Both artifacts show `影片工作區`, `Gemini 未設定`, and `尚無影片。`.
 
 ## Gotchas
 

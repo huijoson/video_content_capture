@@ -21,7 +21,7 @@ Preconditions:
 
 - Doctor passes.
 - A video is open and `#video-details` is visible.
-- You accept that a start contacts YouTube and may contact Gemini. If you cannot accept that, stop. Do not stub the download.
+- You accept that a start contacts the video site and may contact Gemini. If you cannot accept that, stop. Do not stub the download.
 
 - **Read the gate.** Run `control-vcc browser visible --id flow-blocked`. When it prints `visible`, run `control-vcc browser text --id flow-blocked`. A missing Gemini key reads `需要翻譯但尚未設定 Gemini 金鑰：請在專案 .env 設定 GEMINI_API_KEY 並重啟服務。` An unresolved platform subtitle reads `原語系未知但平台已有字幕：請在「字幕版本」選擇平台字幕並按「取得所選平台字幕」，再按「以此版本翻譯」指名來源，之後即可開始一鍵流程。` `開始處理` stays disabled. That visible notice is the proof of the gate. Do not click start.
 - **Start when it is enabled.** Run `control-vcc browser click --role button --name "開始處理"`. Then run `control-vcc browser wait --id flow-status --any "流程待處理" "流程排隊中" "流程處理中" "流程已完成" "流程失敗" "流程已取消" "流程已中斷" --timeout 180`.

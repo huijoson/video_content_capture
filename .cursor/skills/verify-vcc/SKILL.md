@@ -1,13 +1,13 @@
 ---
 name: verify-vcc
-description: Drive the local YouTube workspace from `vcc serve` in a browser and prove what a user can see. Use when changing the workspace page, library, video load, one-click flow, or Q&A, and a unit test would not show the page.
+description: Drive the local video workspace from `vcc serve` in a browser and prove what a user can see. Use when changing the workspace page, library, video load, one-click flow, or Q&A, and a unit test would not show the page.
 ---
 
-# Verify the YouTube workspace
+# Verify the video workspace
 
-The user-facing app is the local workspace served by `vcc serve`. The page title is `YouTube 影片工作區`. The CLI commands `probe`, `transcribe`, `report`, and `run` write to an output directory the operator names. This harness drives the workspace page.
+The user-facing app is the local workspace served by `vcc serve`. The page title is `影片工作區`. The CLI commands `probe`, `transcribe`, `report`, and `run` write to an output directory the operator names. This harness drives the workspace page.
 
-Run every command below from the repository root. The helper is `.cursor/skills/verify-vcc/scripts/control-vcc`. It needs `uv` on `PATH` (or at `~/.local/bin`) and `uv sync` already applied in this checkout, plus `ffmpeg` and `ffprobe` for any journey that transcodes. Google Chrome is the browser.
+Run every command below from the repository root. The helper is `.cursor/skills/verify-vcc/scripts/control-vcc`. It runs on Linux only, because it reads `/proc` to own the processes it starts. It needs `uv` on `PATH` (or at `~/.local/bin`) and `uv sync` already applied in this checkout, plus `ffmpeg` and `ffprobe` for any journey that transcodes. Google Chrome is the browser.
 
 ## Launch
 
@@ -30,7 +30,7 @@ It passes only when all of the following are true.
 - The recorded pid is still the `vcc serve` process for this run's library directory.
 - That process owns the port.
 - `/api/status` reports the checkout version. The package version is `0.1.0` today.
-- `/` contains `YouTube 影片工作區`.
+- `/` contains `影片工作區`.
 - `/api/videos` is a JSON list.
 - `library.sqlite3` is present.
 
@@ -46,7 +46,7 @@ Open the recorded URL in the Chrome this run started.
 .cursor/skills/verify-vcc/scripts/control-vcc browser open
 ```
 
-`browser open` waits until the title is `YouTube 影片工作區` and the service and library status lines have left their loading text. The window is 1280 by 900 CSS pixels, wider than the 60rem narrow layout, so the library, playback, and Q&A columns are all on the page.
+`browser open` waits until the title is `影片工作區` and the service and library status lines have left their loading text. The window is 1280 by 900 CSS pixels, wider than the 60rem narrow layout, so the library, playback, and Q&A columns are all on the page.
 
 Interact by role and accessible name.
 
@@ -74,7 +74,7 @@ Write proof under `.cursor/skills/verify-vcc/evidence/`, or under `VCC_VERIFY_EV
 .cursor/skills/verify-vcc/scripts/control-vcc browser screenshot --path library/empty.png
 ```
 
-The screenshot command scrolls to the top and captures the full page, so the heading `YouTube 影片工作區` stays in the image.
+The screenshot command scrolls to the top and captures the full page, so the heading `影片工作區` stays in the image.
 
 Proof standards:
 
@@ -82,7 +82,7 @@ Proof standards:
 - Capture the action and the resulting state. A final screenshot alone is not the proof.
 - Pair a visible result with the stored result. For the library, that pair is the status line plus `control-vcc read /api/videos`.
 - The ARIA snapshot and the screenshot both have to show the workspace title.
-- Mocks are not part of this harness. A journey that needs YouTube or Gemini uses the real service. If the precondition is missing, stop and record the unmet precondition in the feature's Gotchas. Do not weaken the journey so it passes.
+- Mocks are not part of this harness. A journey that needs the video site or Gemini uses the real service. If the precondition is missing, stop and record the unmet precondition in the feature's Gotchas. Do not weaken the journey so it passes.
 - `gemini_configured=false` is observed from doctor and from the status line `Gemini 未設定`. The absence of a key file is not that observation.
 - A flow or query that fails still writes the status text the page shows. Do not treat a failure sentence as success.
 

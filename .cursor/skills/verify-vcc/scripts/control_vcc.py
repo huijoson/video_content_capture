@@ -1,4 +1,6 @@
-"""Drive an isolated local YouTube workspace for verification.
+"""Drive an isolated local video workspace for verification.
+
+Linux only: process and port ownership are read from /proc.
 
 The process this file starts is the only process it will stop. Identity is the
 library directory and the Chrome profile created for the run, not a process name.
@@ -26,6 +28,7 @@ from video_content_capture import __version__
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[4]
+PAGE_TITLE = "影片工作區"
 DROPPED_ENV = {
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
@@ -321,7 +324,7 @@ def command_launch() -> None:
         if (
             status == 200
             and page_status == 200
-            and "YouTube 影片工作區" in page
+            and PAGE_TITLE in page
             and videos_status == 200
             and isinstance(videos, list)
             and sqlite.is_file()
@@ -347,6 +350,7 @@ def command_launch() -> None:
             print(f"library_dir={library}")
             print(f"version={payload['version']}")
             return
+        last_error = f"server answered but {PAGE_TITLE!r} or the library was not ready"
         time.sleep(0.2)
     stop_pids([process.pid, *descendants(process.pid)])
     raise SystemExit(last_error)
@@ -376,7 +380,7 @@ def doctor_problems(state: dict) -> list[str]:
             problems.append(
                 f"running version {payload.get('version')} does not match checkout {__version__}"
             )
-    if page_status != 200 or "YouTube 影片工作區" not in page:
+    if page_status != 200 or PAGE_TITLE not in page:
         problems.append("workspace page is not being served")
     if videos_status != 200 or not isinstance(videos, list):
         problems.append("video list is not readable")
@@ -614,7 +618,7 @@ async def open_page(state: dict) -> None:
             )
             assert isinstance(value, dict)
             if (
-                value.get("title") == "YouTube 影片工作區"
+                value.get("title") == PAGE_TITLE
                 and value.get("service")
                 and "正在讀取服務狀態" not in value["service"]
                 and value.get("library")
@@ -708,7 +712,7 @@ async def write_snapshot(state: dict, path: Path) -> None:
                 children[parent].append(node["nodeId"])
             else:
                 roots.append(node["nodeId"])
-        lines = [f"url: {state['url']}", "title: YouTube 影片工作區", ""]
+        lines = [f"url: {state['url']}", f"title: {PAGE_TITLE}", ""]
 
         def walk(node_id: str, depth: int) -> None:
             node = by_id[node_id]
@@ -816,6 +820,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if not Path("/proc/self").is_dir():
+        raise SystemExit("control-vcc needs Linux /proc to own the processes it starts")
     if args.cmd == "launch":
         command_launch()
     elif args.cmd == "doctor":
