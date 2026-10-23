@@ -44,6 +44,10 @@ outputs/
 .superpowers/
 docs/checkpoints/
 
+# Verification skill scratch. Proof files stay on disk and are not source.
+.cursor/skills/verify-vcc/run/
+.cursor/skills/verify-vcc/evidence/
+
 # Impeccable: platform engine binary is fetched on demand into ~/.impeccable/bin/
 .github/skills/impeccable/scripts/bin/
 # Impeccable: ephemeral working files (shared artifacts stay tracked: config.json,
